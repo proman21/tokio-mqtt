@@ -4,3 +4,11 @@ version = "0.1.0"
 authors = ["Adam Jacobus <adam.m.jacobus@gmail.com>"]
 
 [dependencies]
+futures = "0.1.11"
+tokio-core = "0.1.6"
+tokio-io = "0.1.0"
+tokio-tls = "0.1.2"
+bitflags = "0.8.0"
+error-chain = { git = "https://github.com/brson/error-chain" }
+nom = "2.1.0"
+enum_primitive = "0.1.1"
