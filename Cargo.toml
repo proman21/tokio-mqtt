@@ -1,0 +1,6 @@
+[package]
+name = "tokio-mqtt"
+version = "0.1.0"
+authors = ["Adam Jacobus <adam.m.jacobus@gmail.com>"]
+
+[dependencies]
