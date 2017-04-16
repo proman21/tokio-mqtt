@@ -1,3 +1,48 @@
+//! A Mutex for the Future(s)
+//!
+//! API is similar to [`futures::sync::BiLock`](https://docs.rs/futures/0.1.11/futures/sync/struct.BiLock.html)
+//! However, it can be cloned into as many handles as desired.
+//!
+//! ```
+//! extern crate futures;
+//! extern crate futures_mutex;
+//!
+//! use futures::{Future, Poll, Async};
+//! use futures_mutex::FutMutex;
+//!
+//! struct AddTwo {
+//!     lock: FutMutex<usize>
+//! }
+//!
+//! impl Future for AddTwo {
+//!     type Item = usize;
+//!     type Error = ();
+//!     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+//!         match self.lock.poll_lock() {
+//!             Async::Ready(mut g) => {
+//!                 *g += 2;
+//!                 Ok(Async::Ready(*g))
+//!             },
+//!             Async::NotReady => Ok(Async::NotReady)
+//!         }
+//!     }
+//! }
+//!
+//! fn main() {
+//!     let lock1: FutMutex<usize> = FutMutex::new(0);
+//!     let lock2 = lock1.clone();
+//!
+//!     let future = AddTwo { lock: lock2 };
+//!
+//!     // This future will return the current value and the recovered lock.
+//!     let used_lock = lock1.lock().map(|b| (*b, b.unlock()));
+//!
+//!     let _ = future.join(used_lock).map(|(add_two, (value, _))| {
+//!         assert_eq!(add_two, value);
+//!     }).wait().unwrap();
+//! }
+//! ```
+
 extern crate futures;
 extern crate crossbeam;
 
@@ -29,14 +74,12 @@ unsafe impl<T: Send> Sync for Inner<T> {}
 /// A Mutex designed for use inside Futures. Works like `BiLock<T>` from the `futures` crate, but
 /// with more than 2 handles.
 ///
-/// **THIS IS NOT A GENRAL PURPOSE MUTEX! IF YOU CALL `poll_lock` OR `lock` OUTSIDE THE CONTEXT **
-/// **OF A TASK, IT WILL PANIC AND EAT YOUR LAUNDRY.**
+/// **THIS IS NOT A GENRAL PURPOSE MUTEX! IF YOU CALL `poll_lock` OR `lock` OUTSIDE THE CONTEXT OF A TASK, IT WILL PANIC AND EAT YOUR LAUNDRY.**
 ///
 /// This type provides a Mutex that will track tasks that are requesting the Mutex, and will unpark
 /// them in the order they request the lock.
 ///
-/// *As of now, there is no strong guarantee that a particular handle of the lock won't be *
-/// *starved. Hopefully the use of the queue will prevent this, but I haven't tried to test that.*
+/// *As of now, there is no strong guarantee that a particular handle of the lock won't be starved. Hopefully the use of the queue will prevent this, but I haven't tried to test that.*
 #[derive(Debug)]
 pub struct FutMutex<T> {
     inner: Arc<Inner<T>>
@@ -77,6 +120,11 @@ impl<T> FutMutex<T> {
         }
     }
 
+    /// Convert this lock into a future that resolves to a guard that allows access to the data.
+    /// This function returns `FutMutexAcquire<T>`, which resolves to a `FutMutexAcquired<T>`
+    /// guard type.
+    ///
+    /// The returned future will never return an error.
     pub fn lock(self) -> FutMutexAcquire<T> {
         FutMutexAcquire {
             inner: self
