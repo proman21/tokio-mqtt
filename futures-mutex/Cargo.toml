@@ -6,7 +6,7 @@ license = "GPL-3.0+"
 description = "A Mutex for the Future(s)"
 readme = "README.md"
 documentation = "https://docs.rs/futures-mutex"
-repository = "https://github.com/proman21/futures-mutex"
+repository = "https://github.com/proman21/tokio-mqtt/tree/master/futures-mutex"
 keywords = ["future", "futures", "mutex", "concurrency"]
 categories = ["asynchronous", "concurrency"]
 
