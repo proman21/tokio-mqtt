@@ -1,0 +1,8 @@
+[package]
+name = "futures-mutex"
+version = "0.1.0"
+authors = ["Adam Jacobus <adam.m.jacobus@gmail.com>"]
+
+[dependencies]
+futures = "0.1.11"
+crossbeam = "0.2.10" 
