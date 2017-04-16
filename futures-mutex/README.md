@@ -2,7 +2,7 @@
 
 *A Mutex for the Future(s)*
 
-[![Crates.io](https://img.shields.io/crates/v/futures-mutex.svg?maxAge=2592000)](https://crates.io/crates/futures-mutex)
+[![Crates.io](https://img.shields.io/crates/v/futures-mutex.svg)](https://crates.io/crates/futures-mutex)
 [![Docs.rs](https://docs.rs/futures-mutex/badge.svg)](https://docs.rs/futures-mutex)
 
 ## Usage
