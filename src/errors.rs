@@ -41,6 +41,10 @@ error_chain! {
         InvalidTopicFilter {
             description("Topic filter has invalid syntax")
         }
+
+        AlreadyConnected {
+            description("Client already connected to server")
+        }
     }
 }
 

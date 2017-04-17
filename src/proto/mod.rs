@@ -31,7 +31,7 @@ fn encode_vle(num: usize) -> Option<Bytes> {
     return Some(collect.freeze());
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MqttPacket {
     pub ty: PacketType,
     pub flags: PacketFlags,

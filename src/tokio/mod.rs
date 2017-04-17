@@ -1,6 +1,7 @@
 mod codec;
 mod mqtt_loop;
 mod response;
+mod request;
 
 pub use self::mqtt_loop::{Loop, LoopClient};
 pub use self::codec::MqttCodec;
@@ -44,7 +45,7 @@ pub enum SourceItem<I> {
 
 pub enum SourceError {
     Response(Error),
-    Request(()),
+    Request(Error),
     Timeout(Error)
 }
 

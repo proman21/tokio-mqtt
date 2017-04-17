@@ -91,6 +91,7 @@ impl ClientConfig {
 }
 
 pub struct Client {
+    connected: bool,
     handle: Handle,
     client: LoopClient
 }
@@ -116,9 +117,12 @@ impl Client {
     /// the running program.
     pub fn new<I, P>(io: I, state: P, handle: Handle) -> Client
         where I: AsyncRead + AsyncWrite + 'static + Send, P: Persistence + Send + 'static {
+        // Setup a continual loop. This loop handles all the nitty gritty of reciving and
+        // dispatching packets from the server. It essentially multiplexes packets to the correct // destination. Designed to run constantly on a Core loop, unless an error occurs.
         let (lp, client) = Loop::new(io, state);
         handle.spawn(lp);
         Client {
+            connected: false,
             handle: handle,
             client: client
         }
@@ -132,8 +136,9 @@ impl Client {
     ///
     /// `config` provides options to configure the client.
     pub fn connect(&mut self, config: &ClientConfig) -> MqttResult<Option<BoxMqttStream<MqttResult<SubItem>>>> {
-        // Setup a continual loop. This loop handles all the nitty gritty of reciving and
-        // dispatching packets from the server. It essentially multiplexes packets to the correct // destination. Designed to run constantly on a core loop, unless an error occurs.
+        if self.connected {
+            bail!(ErrorKind::AlreadyConnected)
+        }
 
         // Prepare a connect packet to send using the provided values
         let lwt = if let Some((ref t, ref q, ref r, ref m)) = config.lwt {
@@ -163,6 +168,8 @@ impl Client {
         let res_fut = self.client.request(connect)?;
         // Wait for acknowledgement
         let res = res_fut.wait().chain_err(|| ErrorKind::LoopAbortError)?;
+
+        self.connected = true;
 
         match res? {
             ClientReturn::Onetime(_) => Ok(None),

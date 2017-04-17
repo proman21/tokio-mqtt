@@ -14,6 +14,7 @@ use super::codec::MqttCodec;
 use super::{ClientReturn, MqttFramedWriter, SubscriptionSender, SourceTag,
     SourceItem, SourceError, PublishState, OneTimeKey, TopicFilter};
 use super::response::ResponseProcessor;
+use super::request::RequestProcessor;
 
 pub struct LoopClient {
     queue: UnboundedSender<(MqttPacket, Sender<Result<ClientReturn>>)>
@@ -151,8 +152,10 @@ impl<I, P> Loop<I, P> where I: AsyncRead + AsyncWrite + Send + 'static,
             persistence: persist
         });
         let res_fut = ResponseProcessor::new(fread.into_future(), loop_data.clone());
+        let req_fut = RequestProcessor::new(rx.into_future(), loop_data.clone());
         let mut sources = HashMap::new();
         let _ = sources.insert(SourceTag::Response, res_fut.boxed());
+        let _ = sources.insert(SourceTag::Request, req_fut.boxed());
         let lp = Loop {
             status: LoopStatus::Running,
             data: loop_data,
