@@ -10,16 +10,17 @@ tokio-io = "0.1.0"
 tokio-tls = "0.1.2"
 bitflags = "0.8.0"
 error-chain = { git = "https://github.com/brson/error-chain" }
-nom = { version="2.1.0" }
+nom = "2.1.0"
 enum_primitive = "0.1.1"
 bytes = "0.4.1"
-rustc-serialize = "0.3.23"
-bincode = "0.6.1"
+serde_derive = "0.9.13"
+bincode = "0.7.0"
 touch = "0"
 linked-hash-map = "0.4.2"
 take = "0.1.0"
 regex = "0.2"
 lazy_static = "0.2"
+futures-mutex = { path = "futures-mutex" }
 
 [dev-dependencies]
 nom-test-helpers = "2.0.0"
