@@ -18,6 +18,14 @@ error_chain! {
             description("String too long to encode")
         }
 
+        PacketDecodingError {
+            description("Error decoding packet")
+        }
+
+        PacketEncodingError {
+            description("Error encoding packet")
+        }
+
         LoopCommsError {
             description("An error occured communicating with the loop")
         }
@@ -33,6 +41,12 @@ error_chain! {
         InvalidTopicFilter {
             description("Topic filter has invalid syntax")
         }
+    }
+}
+
+impl From<self::proto::ErrorKind> for Error {
+    fn from(e: self::proto::ErrorKind) -> Error {
+        Error::from(ErrorKind::Protocol(e))
     }
 }
 
@@ -58,6 +72,16 @@ pub mod proto {
             SubscriptionRejected(t: String, q: QualityOfService) {
                 description("Server rejected a subscription")
                 display("A subscription to '{}'@{} was rejected by the server", t, q)
+            }
+
+            InvalidPacket(s: String) {
+                description("An invalid packet was encountered")
+                display("Invalid packet found while decoding: {}", s)
+            }
+
+            QualityOfServiceError(q: QualityOfService, s: String) {
+                description("An error occurred while processing a service flow")
+                display("While processing a {} flow, the following error occurred: {}", q, s)
             }
         }
     }

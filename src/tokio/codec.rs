@@ -14,7 +14,7 @@ impl Encoder for MqttCodec {
             dst.extend(b);
             Ok(())
         } else {
-            bail!(ErrorKind::Msg("Encoding Error".into()))
+            bail!(ErrorKind::PacketEncodingError)
         }
     }
 }

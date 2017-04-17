@@ -4,6 +4,7 @@ mod parsers;
 pub use self::types::*;
 
 use ::errors::{ErrorKind as MqttErrorKind, Result as MqttResult};
+use ::errors::proto;
 use ::nom::IResult;
 use ::bytes::{Bytes, BytesMut, BufMut};
 use self::parsers::packet;
@@ -30,6 +31,7 @@ fn encode_vle(num: usize) -> Option<Bytes> {
     return Some(collect.freeze());
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct MqttPacket {
     pub ty: PacketType,
     pub flags: PacketFlags,
@@ -56,8 +58,29 @@ impl MqttPacket {
                 headers: hd,
                 payload: pl
             }, rest.into()))),
-            IResult::Incomplete(_) => Ok(None),
-            IResult::Error(e) => bail!(MqttErrorKind::Msg("Oops".into()))
+            IResult::Incomplete(_) => return Ok(None),
+            IResult::Error(e) => bail!(MqttErrorKind::PacketDecodingError)
+        }
+    }
+
+    pub fn validate(&self) -> MqttResult<()> {
+        use self::PacketType::*;
+        match self.ty {
+            ConnAck | PubAck | PubRec | PubComp | SubAck | UnsubAck | PingResp => {
+                if self.flags.bits() == 0 {
+                    Ok(())
+                } else {
+                    bail!(proto::ErrorKind::InvalidPacket("Invalid packet flags".into()))
+                }
+            },
+            PubRel => {
+                if self.flags.bits() == 0b0010 {
+                    Ok(())
+                } else {
+                    bail!(proto::ErrorKind::InvalidPacket("Invalid packet flags".into()))
+                }
+            },
+            _ => Ok(())
         }
     }
 
@@ -150,7 +173,7 @@ impl MqttPacket {
         headers.insert("packet_id".into(), Headers::PacketId(id));
         MqttPacket {
             ty: PacketType::PubRel,
-            flags: PacketFlags::empty(),
+            flags: PUBREL,
             headers: headers,
             payload: Payload::None
         }
@@ -190,7 +213,7 @@ impl MqttPacket {
 
         MqttPacket {
             ty: PacketType::Unsubscribe,
-            flags: SUB,
+            flags: UNSUB,
             headers: headers,
             payload: Payload::Unsubscribe(subs)
         }

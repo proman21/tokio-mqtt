@@ -1,18 +1,18 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use ::futures::{Poll, Async};
 use ::futures::future::{Future, BoxFuture, select_all};
 use ::futures::stream::Stream;
 use ::futures::sync::oneshot::{channel, Sender, Canceled};
 use ::futures::sync::mpsc::{unbounded, UnboundedSender};
 use ::tokio_io::{AsyncRead, AsyncWrite};
+use ::futures_mutex::FutMutex;
 
 use ::errors::{Error, ErrorKind, Result, ResultExt};
 use ::persistence::Persistence;
 use ::proto::MqttPacket;
 use super::codec::MqttCodec;
 use super::{ClientReturn, MqttFramedWriter, SubscriptionSender, SourceTag,
-    SourceItem, SourceError, PublishFlow, OneTimeKey};
+    SourceItem, SourceError, PublishState, OneTimeKey, TopicFilter};
 use super::response::ResponseProcessor;
 
 pub struct LoopClient {
@@ -38,15 +38,15 @@ pub struct LoopData<I, P> where I: AsyncRead + AsyncWrite + Send + 'static, P: P
     // Sink for app messages that come from old subs
     pub session_subs: Option<SubscriptionSender>,
     // Server publishing state tracker for QoS1,2 messages
-    pub server_publish_state: HashMap<u16, PublishFlow<P>>,
+    pub server_publish_state: HashMap<u16, PublishState<P>>,
     // Client publish state tracker for QoS1,2 messages
-    pub client_publish_state: HashMap<u16, PublishFlow<P>>,
+    pub client_publish_state: HashMap<u16, PublishState<P>>,
     // Map recievers of one-time requests
     pub one_time: HashMap<OneTimeKey, (MqttPacket, Sender<Result<ClientReturn>>)>,
     // Current subscriptions
-    pub subscriptions: HashMap<String, SubscriptionSender>,
+    pub subscriptions: HashMap<String, (TopicFilter, SubscriptionSender)>,
     // Shared mutable Persistence cache
-    pub persistence: Arc<Mutex<P>>,
+    pub persistence: P,
 }
 
 /// Internal loop for the MQTT client.
@@ -129,7 +129,7 @@ pub struct LoopData<I, P> where I: AsyncRead + AsyncWrite + Send + 'static, P: P
 /// operation occurs that isn't the timeout, the timeout is dropped and a new one is setup instead.
 
 pub struct Loop<I, P> where I: AsyncRead + AsyncWrite + Send + 'static, P: Persistence {
-    data: Arc<Mutex<LoopData<I, P>>>,
+    data: FutMutex<LoopData<I, P>>,
     // Current event sources
     sources: HashMap<SourceTag, BoxFuture<SourceItem<I>, SourceError>>,
     status: LoopStatus<Error>
@@ -137,11 +137,11 @@ pub struct Loop<I, P> where I: AsyncRead + AsyncWrite + Send + 'static, P: Persi
 
 impl<I, P> Loop<I, P> where I: AsyncRead + AsyncWrite + Send + 'static,
     P: Persistence + Send + 'static {
-    pub fn new(io: I, persist: Arc<Mutex<P>>) -> (Loop<I, P>, LoopClient) {
+    pub fn new(io: I, persist: P) -> (Loop<I, P>, LoopClient) {
         let (tx, rx) = unbounded::<(MqttPacket, Sender<Result<ClientReturn>>)>();
         let (fwrite, fread) = io.framed(MqttCodec).split();
         let client = LoopClient::new(tx);
-        let loop_data = Arc::new(Mutex::new(LoopData {
+        let loop_data = FutMutex::new(LoopData {
             framed_write: fwrite,
             session_subs: None,
             server_publish_state: HashMap::new(),
@@ -149,7 +149,7 @@ impl<I, P> Loop<I, P> where I: AsyncRead + AsyncWrite + Send + 'static,
             one_time: HashMap::new(),
             subscriptions: HashMap::new(),
             persistence: persist
-        }));
+        });
         let res_fut = ResponseProcessor::new(fread.into_future(), loop_data.clone());
         let mut sources = HashMap::new();
         let _ = sources.insert(SourceTag::Response, res_fut.boxed());

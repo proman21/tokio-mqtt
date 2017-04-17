@@ -39,6 +39,14 @@ impl PacketFlags {
             QualityOfService::QoS0
         }
     }
+
+    pub fn retain(&self) -> bool {
+        self.intersects(RET)
+    }
+
+    pub fn duplicate(&self) -> bool {
+        self.intersects(DUP)
+    }
 }
 
 bitflags! {
@@ -260,10 +268,6 @@ impl MqttString {
         b.put(&self.0);
         b.freeze()
     }
-
-    pub fn into_inner(self) -> String {
-        self.0
-    }
 }
 
 impl Deref for MqttString {
@@ -274,9 +278,15 @@ impl Deref for MqttString {
     }
 }
 
+impl Into<String> for MqttString {
+    fn into(self) -> String {
+        self.0
+    }
+}
 
 pub type Credentials<T> = Option<(T, Option<T>)>;
 
+#[derive(Clone)]
 pub struct Subscription {
     pub topic: MqttString,
     pub qos: QualityOfService
@@ -294,6 +304,7 @@ impl Subscription {
     }
 }
 
+#[derive(Clone)]
 pub enum Payload {
     Connect(MqttString, Option<(MqttString, Bytes)>, Credentials<MqttString>),
     Subscribe(Vec<Subscription>),

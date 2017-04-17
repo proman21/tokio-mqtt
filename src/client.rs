@@ -1,5 +1,4 @@
 use std::default::Default;
-use std::sync::{Arc, Mutex};
 use ::tokio_core::reactor::Handle;
 use ::tokio_io::{AsyncRead, AsyncWrite};
 use ::futures::Future;
@@ -115,7 +114,7 @@ impl Client {
     /// **Please don't give this method a clone of a connection**. The client is expected to own a
     /// unique value that it can manipulate at will without disrupting other processes going on in
     /// the running program.
-    pub fn new<I, P>(io: I, state: Arc<Mutex<P>>, handle: Handle) -> Client
+    pub fn new<I, P>(io: I, state: P, handle: Handle) -> Client
         where I: AsyncRead + AsyncWrite + 'static + Send, P: Persistence + Send + 'static {
         let (lp, client) = Loop::new(io, state);
         handle.spawn(lp);

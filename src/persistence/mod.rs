@@ -30,7 +30,7 @@ use std::error;
 ///
 pub trait Persistence {
     type Key: Send;
-    type Error: error::Error;
+    type Error: error::Error + Send + 'static;
     /// Append a packet into the cache, returning a `Key` addressing the location if successful.
     fn append(&mut self, packet: Vec<u8>) -> Result<Self::Key, Self::Error>;
     /// Retrieve a packet from the cache

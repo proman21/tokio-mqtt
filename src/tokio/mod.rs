@@ -10,6 +10,7 @@ use ::futures::stream::{SplitStream, SplitSink};
 use ::futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
 use ::futures::sync::oneshot::Sender;
 use ::regex::{escape, Regex};
+use ::bytes::Bytes;
 
 use ::errors::{Result, Error, ErrorKind, ResultExt};
 use ::proto::{MqttPacket, QualityOfService};
@@ -73,17 +74,10 @@ pub enum OneTimeKey {
 /// 2. Receive Received message
 /// 3. Send Release message, transition to Released.
 /// 4. Receive Complete message
-enum PublishState<P> where P: Persistence {
-    Sent(P::Key, MqttPacket),
-    Received(P::Key, MqttPacket),
-    Released(P::Key, MqttPacket)
-}
-
-pub struct PublishFlow<P> where P: Persistence{
-    id: u16,
-    msg: Vec<u8>,
-    state: PublishState<P>,
-    ret: Option<Sender<Result<ClientReturn>>>
+pub enum PublishState<P> where P: Persistence {
+    Sent(P::Key, Option<Sender<Result<ClientReturn>>>),
+    Received(MqttPacket),
+    Released(P::Key, Option<Sender<Result<ClientReturn>>>)
 }
 
 lazy_static!{
@@ -92,7 +86,8 @@ lazy_static!{
 }
 
 pub struct TopicFilter {
-    matcher: Regex
+    matcher: Regex,
+    original: String
 }
 
 impl TopicFilter {
@@ -117,7 +112,8 @@ impl TopicFilter {
             }
         }
         let reg = format!("^{}$", collect.join("/"));
-        Ok(TopicFilter{
+        Ok(TopicFilter {
+            original: String::from(s),
             matcher: Regex::new(&reg).chain_err(|| ErrorKind::InvalidTopicFilter)?
         })
     }
