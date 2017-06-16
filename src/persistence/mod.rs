@@ -1,6 +1,8 @@
 mod fs;
+mod memory;
 
 pub use self::fs::FSPersistence;
+pub use self::memory::MemoryPersistence;
 
 use std::error;
 /// This trait provides an interface for basic cache functionality required by the MQTT client.
