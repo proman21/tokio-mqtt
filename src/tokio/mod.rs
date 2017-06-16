@@ -7,11 +7,10 @@ pub use self::mqtt_loop::{Loop, LoopClient};
 pub use self::codec::MqttCodec;
 
 use ::tokio_io::codec::Framed;
-use ::futures::stream::{SplitStream, SplitSink};
+use ::futures::stream::{SplitStream, SplitSink, Peekable};
 use ::futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
 use ::futures::sync::oneshot::Sender;
 use ::regex::{escape, Regex};
-use ::bytes::Bytes;
 
 use ::errors::{Result, Error, ErrorKind, ResultExt};
 use ::proto::{MqttPacket, QualityOfService};
@@ -21,26 +20,29 @@ use ::persistence::Persistence;
 type MqttFramedReader<I> = SplitStream<Framed<I, MqttCodec>>;
 type MqttFramedWriter<I> = SplitSink<Framed<I, MqttCodec>>;
 type SubscriptionSender = UnboundedSender<Result<SubItem>>;
-type ClientQueue = UnboundedReceiver<(MqttPacket, Sender<Result<ClientReturn>>)>;
+type ClientQueue = Peekable<UnboundedReceiver<ClientRequest>>;
+
+pub enum TimeoutType {
+    Ping(usize),
+    Disconnect
+}
 
 pub enum ClientReturn {
     Onetime(Option<MqttPacket>),
     Ongoing(Vec<Result<(BoxMqttStream<Result<SubItem>>, QualityOfService)>>)
 }
 
-/// These types act like tagged future items/errors, allowing the loop to know which future has
-/// returned. This simplifies the process of using select_all.
-#[derive(PartialEq, Eq, Hash)]
-enum SourceTag {
-    Response,
-    Request,
-    Timeout
+pub enum ClientRequest {
+    Normal(MqttPacket, Sender<Result<ClientReturn>>),
+    Disconnect(MqttPacket, Sender<Result<ClientReturn>>, Option<u64>)
 }
 
+/// These types act like tagged future items/errors, allowing the loop to know which future has
+/// returned. This simplifies the process of handling sources.
 pub enum SourceItem<I> {
     Response(MqttFramedReader<I>),
-    Request(ClientQueue),
-    Timeout(())
+    Request(ClientQueue, Option<(Option<u64>, Sender<Result<ClientReturn>>)>),
+    Timeout(TimeoutType)
 }
 
 pub enum SourceError {

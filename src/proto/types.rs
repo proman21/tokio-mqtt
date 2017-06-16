@@ -14,6 +14,7 @@ static CRC_5_MESSAGE: &'static str = "0x05 Connection Refused, not authorized";
 pub type HeaderMap = LinkedHashMap<String, Headers>;
 
 bitflags! {
+    #[derive(Serialize, Deserialize)]
     pub flags PacketFlags: u8 {
         const DUP  = 0b1000,
         const QOS2 = 0b0100,
@@ -50,6 +51,7 @@ impl PacketFlags {
 }
 
 bitflags! {
+    #[derive(Serialize, Deserialize)]
     pub flags ConnectFlags: u8 {
         const USERNAME    = 0b10000000,
         const PASSWORD    = 0b01000000,
@@ -62,6 +64,7 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Serialize, Deserialize)]
     pub flags ConnAckFlags: u8 {
         const SP = 0b0001,
     }
@@ -74,7 +77,7 @@ impl ConnAckFlags {
 }
 
 enum_from_primitive! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
     pub enum PacketType {
         Connect     = 1,
         ConnAck     = 2,
@@ -94,7 +97,7 @@ enum_from_primitive! {
 }
 
 enum_from_primitive! {
-    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
     pub enum ConnectReturnCode {
         Accepted          = 0,
         BadProtoVersion   = 1,
@@ -132,7 +135,7 @@ impl fmt::Display for ConnectReturnCode {
 }
 
 enum_from_primitive! {
-    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
     #[allow(non_camel_case_types)]
     pub enum ProtocolLevel {
         V3_1_1 = 4
@@ -140,7 +143,7 @@ enum_from_primitive! {
 }
 
 enum_from_primitive! {
-    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
     pub enum QualityOfService {
         QoS0 = 0,
         QoS1 = 1,
@@ -165,7 +168,7 @@ impl fmt::Display for QualityOfService {
 }
 
 enum_from_primitive!{
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Serialize, Deserialize)]
     pub enum SubAckReturnCode {
         SuccessQoS0 = 0,
         SuccessQoS1 = 1,
@@ -217,7 +220,7 @@ impl LWTMessage {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum Headers {
     ConnFlags(ConnectFlags),
     ConnAckFlags(ConnAckFlags),
@@ -246,7 +249,7 @@ impl Headers {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MqttString(String);
 
 impl MqttString {
@@ -286,7 +289,7 @@ impl Into<String> for MqttString {
 
 pub type Credentials<T> = Option<(T, Option<T>)>;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Subscription {
     pub topic: MqttString,
     pub qos: QualityOfService
@@ -304,13 +307,13 @@ impl Subscription {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum Payload {
-    Connect(MqttString, Option<(MqttString, Bytes)>, Credentials<MqttString>),
+    Connect(MqttString, Option<(MqttString, Vec<u8>)>, Credentials<MqttString>),
     Subscribe(Vec<Subscription>),
     SubAck(Vec<SubAckReturnCode>),
     Unsubscribe(Vec<MqttString>),
-    Application(Bytes),
+    Application(Vec<u8>),
     None
 }
 
@@ -351,6 +354,6 @@ impl Payload {
 
 impl<'a> From<&'a [u8]> for Payload {
     fn from(b: &'a [u8]) -> Payload {
-        Payload::Application(Bytes::from(b))
+        Payload::Application(Vec::from(b))
     }
 }

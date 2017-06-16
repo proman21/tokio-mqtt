@@ -92,7 +92,7 @@ impl MqttPacket {
 
         let last_will = if let Some(will) = lwt {
             flags.insert(will.encode_flags());
-            Some((will.topic, will.message))
+            Some((will.topic, will.message.to_vec()))
         } else {
             None
         };
@@ -142,7 +142,7 @@ impl MqttPacket {
             ty: PacketType::Publish,
             flags: flags,
             headers: headers,
-            payload: Payload::Application(msg)
+            payload: Payload::Application(msg.to_vec())
         }
     }
 

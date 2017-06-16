@@ -45,6 +45,10 @@ error_chain! {
         AlreadyConnected {
             description("Client already connected to server")
         }
+
+        ClientUnavailable {
+            description("Client is stopped or is disconnecting")
+        }
     }
 }
 

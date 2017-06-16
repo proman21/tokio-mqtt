@@ -110,22 +110,26 @@ impl Client {
     /// and QoS2 publishing. You provide this object so that in the event of an unexpected
     /// disconnect, the client can retrieve packets and resend them.
     ///
+    /// `config` provides options to configure the client.
+    ///
+    /// `handle` is a `tokio-core::reactor::Handle`.
+    ///
     /// Note that the client takes an owned io type, so that it may follow protocol conformance and
     /// disconnect the network connection when needed.
     /// **Please don't give this method a clone of a connection**. The client is expected to own a
     /// unique value that it can manipulate at will without disrupting other processes going on in
     /// the running program.
-    pub fn new<I, P>(io: I, state: P, handle: Handle) -> Client
+    pub fn new<I, P>(io: I, state: P, handle: Handle, config: &ClientConfig) -> MqttResult<Client>
         where I: AsyncRead + AsyncWrite + 'static + Send, P: Persistence + Send + 'static {
         // Setup a continual loop. This loop handles all the nitty gritty of reciving and
         // dispatching packets from the server. It essentially multiplexes packets to the correct // destination. Designed to run constantly on a Core loop, unless an error occurs.
-        let (lp, client) = Loop::new(io, state);
+        let (lp, client) = Loop::new(io, state, handle.clone(), config.keep_alive as u64)?;
         handle.spawn(lp);
-        Client {
+        Ok(Client {
             connected: false,
             handle: handle,
             client: client
-        }
+        })
     }
 
     /// Starts an MQTT session with the provided configuration.
@@ -186,7 +190,8 @@ impl Client {
     /// wait for all QoS1 and QoS2 messages to be fully processed, unless `timeout` is specified,
     /// in which case the client will only wait until the timeout value has passed. The future
     /// returned will resolve to a bool; true means all packets were processed before disconnect,
-    /// false meaning the timeout occurred before work could finish.
+    /// false meaning the timeout occurred before work could finish. All streams will still recieve
+    /// packets until the the disconnect packet is issued
     pub fn disconnect(&mut self, timeout: Option<u64>) -> BoxMqttFuture<bool> {
         unimplemented!()
     }
