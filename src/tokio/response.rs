@@ -76,7 +76,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
                 });
                 data.session_subs = Some(tx);
                 let _ = client.send(Ok(ClientReturn::Ongoing(vec![
-                    Ok((custom_rx.boxed(),QualityOfService::QoS0))
+                    Ok((custom_rx.boxed(), QualityOfService::QoS0))
                 ])));
             }
             Ok(None)

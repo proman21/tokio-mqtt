@@ -259,7 +259,10 @@ impl<I, P> Future for Loop<I, P> where I: AsyncRead + AsyncWrite + Send + 'stati
             let res = match self.sources.poll() {
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Ok(Async::Ready(r)) => r,
-                Err(e) => unimplemented!()
+                Err(e) => {
+                    self.status = LoopStatus::Error(Arc<e>);
+                    continue
+                }
             };
             match res {
                 Some(SourceItem::Response(strm)) => {
@@ -326,5 +329,5 @@ impl<I, P> Future for Loop<I, P> where I: AsyncRead + AsyncWrite + Send + 'stati
 enum LoopStatus<E> {
     Running,
     Disconnecting(Sender<Result<ClientReturn>>),
-    Error(E)
+    Error(Arc<E>)
 }
