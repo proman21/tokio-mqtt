@@ -6,6 +6,8 @@ mod request;
 pub use self::mqtt_loop::{Loop, LoopClient};
 pub use self::codec::MqttCodec;
 
+use std::ops::Deref;
+
 use ::tokio_io::codec::Framed;
 use ::futures::stream::{SplitStream, SplitSink, Peekable};
 use ::futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
@@ -49,6 +51,18 @@ pub enum SourceError {
     Response(Error),
     Request(Error),
     Timeout(Error)
+}
+
+impl Deref for SourceError {
+    type Target = Error;
+
+    fn deref(&self) -> &Self::Target {
+        match *self {
+            SourceError::Response(ref e) => e,
+            SourceError::Request(ref e) => e,
+            SourceError::Timeout(ref e) => e
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash)]

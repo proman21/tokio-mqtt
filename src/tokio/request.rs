@@ -6,7 +6,7 @@ use ::futures_mutex::FutMutex;
 use ::bincode;
 
 use ::persistence::Persistence;
-use ::proto::{MqttPacket, PacketType, Headers, QualityOfService};
+use ::proto::{MqttPacket, PacketType, Headers, QualityOfService, PacketId};
 use ::errors::{Result, ErrorKind, ResultExt};
 use super::mqtt_loop::LoopData;
 use super::{
@@ -58,63 +58,45 @@ impl<I, P> Future for RequestProcessor<I, P> where I: AsyncRead + AsyncWrite + S
                     }
                 };
 
-                let s = match packet {
+                match packet {
                     p @ MqttPacket{ty: PacketType::Connect, ..} => {
                         data.one_time.insert(OneTimeKey::Connect, (p.clone(), client));
-                        p
                     },
                     p @ MqttPacket{ty: PacketType::Subscribe, ..} => {
-                        let id = match p.headers.get("packet_id").unwrap() {
-                            &Headers::PacketId(p) => p,
-                            _ => unreachable!()
-                        };
-                        data.one_time.insert(OneTimeKey::Subscribe(id), (p.clone(), client));
-                        p
+                        let id = p.headers.get::<PacketId>().unwrap();
+                        data.one_time.insert(OneTimeKey::Subscribe(*id), (p.clone(), client));
                     },
                     p @ MqttPacket{ty: PacketType::Unsubscribe, ..} => {
-                        let id = match p.headers.get("packet_id").unwrap() {
-                            &Headers::PacketId(p) => p,
-                            _ => unreachable!()
-                        };
-                        data.one_time.insert(OneTimeKey::Unsubscribe(id), (p.clone(), client));
-                        p
+                        let id = p.headers.get::<PacketId>().unwrap().clone();
+                        data.one_time.insert(OneTimeKey::Unsubscribe(*id), (p.clone(), client));
                     },
                     p @ MqttPacket{ty: PacketType::PingReq, ..} => {
                         data.one_time.insert(OneTimeKey::PingReq, (p.clone(), client));
-                        p
                     },
                     p @ MqttPacket{ty: PacketType::Publish, ..} => {
                         match p.flags.qos() {
                             QualityOfService::QoS0 => {},
                             QualityOfService::QoS1 | QualityOfService::QoS2 => {
-                                let id = match p.headers.get("packet_id").unwrap() {
-                                    &Headers::PacketId(p) => p,
-                                    _ => unreachable!()
-                                };
+                                let id = p.headers.get::<PacketId>().unwrap();
 
                                 let ser = bincode::serialize(&p, bincode::Infinite).unwrap();
                                 let key = match data.persistence.append(ser) {
                                     Ok(k) => k,
                                     Err(e) => {
-                                        let _ = client.send(Err(e).chain_err(||
-                                            ErrorKind::PersistenceError));
-                                        return Err(ErrorKind::PersistenceError.into())
+                                        return Err(e).chain_err(|| ErrorKind::PersistenceError)
                                             .map_err(|e| SourceError::Request(e))
                                     }
                                 };
-                                data.client_publish_state.insert(id,
+                                data.client_publish_state.insert(*id,
                                     PublishState::Sent(key, Some(client)));
                             }
                         }
-                        p
                     },
-                    p @ MqttPacket{ty: PacketType::Disconnect, ..} => {
-                        p
-                    },
+                    p @ MqttPacket{ty: PacketType::Disconnect, ..} => {},
                     p @ _ => unreachable!()
                 };
 
-                self.state = Take::new(State::Sending(s))
+                self.state = Take::new(State::Sending(packet))
             },
             State::Sending(packet) => {
                 let mut data = match self.data.poll_lock() {

@@ -52,6 +52,17 @@ error_chain! {
     }
 }
 
+impl Error {
+    pub fn is_transient(&self) -> bool {
+        match *self {
+            Error(ErrorKind::StringConversionError, _) |
+            Error(ErrorKind::InvalidTopicFilter, _) |
+            Error(ErrorKind::AlreadyConnected, _) => true,
+            _ => false
+        }
+    }
+}
+
 impl From<self::proto::ErrorKind> for Error {
     fn from(e: self::proto::ErrorKind) -> Error {
         Error::from(ErrorKind::Protocol(e))
@@ -59,7 +70,7 @@ impl From<self::proto::ErrorKind> for Error {
 }
 
 pub mod proto {
-    use ::proto::{PacketType, ConnectReturnCode, QualityOfService};
+    use ::proto::{PacketType, ConnRetCode, QualityOfService};
     error_chain!{
         errors {
             ResponseTimeout(p: PacketType) {
@@ -72,7 +83,7 @@ pub mod proto {
                 display("Client recieved a unexpected {:?} packet from the server", p)
             }
 
-            ConnectionRefused(c: ConnectReturnCode) {
+            ConnectionRefused(c: ConnRetCode) {
                 description("Connect request denied by the server")
                 display("Server denied connection with this response: {}", c)
             }

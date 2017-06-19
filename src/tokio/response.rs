@@ -12,13 +12,30 @@ use ::futures_mutex::{FutMutex, FutMutexGuard};
 use ::bincode;
 
 use ::persistence::Persistence;
-use ::proto::{MqttPacket, PacketType, Headers, QualityOfService, Payload};
+use ::proto::{
+    MqttPacket,
+    PacketType,
+    Headers,
+    QualityOfService,
+    Payload,
+    ConnectReturnCode,
+    ConnectAckFlags,
+    PacketId,
+    TopicName
+};
 use ::errors::{Result, Error, ErrorKind, ResultExt};
 use ::errors::proto::{ErrorKind as ProtoErrorKind};
 use ::types::SubItem;
 use super::MqttFramedReader;
 use super::mqtt_loop::LoopData;
-use super::{SourceItem, SourceError, ClientReturn, OneTimeKey, TopicFilter, PublishState};
+use super::{
+    SourceItem,
+    SourceError,
+    ClientReturn,
+    OneTimeKey,
+    TopicFilter,
+    PublishState
+};
 
 enum State {
     Reading,
@@ -57,16 +74,10 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
             Entry::Occupied(o) => o.remove()
         };
         // Validate connect return code
-        let crc = match packet.headers.get("connect_return_code").unwrap() {
-            &Headers::ConnRetCode(crc) => crc,
-            _ => unreachable!()
-        };
+        let crc = packet.headers.get::<ConnectReturnCode>().unwrap();
         if crc.is_ok() {
             // If session is not clean, setup a stream.
-            let sess = match packet.headers.get("connect_ack_flags").unwrap() {
-                &Headers::ConnAckFlags(fl) => fl,
-                _ => unreachable!()
-            };
+            let sess = packet.headers.get::<ConnectAckFlags>().unwrap();
             if sess.is_clean() {
                 let _ = client.send(Ok(ClientReturn::Onetime(Some(packet))));
             } else {
@@ -81,20 +92,15 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
             }
             Ok(None)
         } else {
-            let _ = client.send(Err(ErrorKind::from(
-                ProtoErrorKind::ConnectionRefused(crc)).into()));
             return Err(SourceError::Response(ErrorKind::from(
-                ProtoErrorKind::ConnectionRefused(crc.clone())).into()
+                ProtoErrorKind::ConnectionRefused(*crc)).into()
             ))
         }
     }
 
     fn process_sub_ack(mut data: FutMutexGuard<LoopData<I,P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
-        let packet_id = match packet.headers.get("packet_id").unwrap() {
-            &Headers::PacketId(p) => p,
-            _ => unreachable!()
-        };
-        let (o, c) = match data.one_time.entry(OneTimeKey::Subscribe(packet_id)) {
+        let packet_id = packet.headers.get::<PacketId>().unwrap();
+        let (o, c) = match data.one_time.entry(OneTimeKey::Subscribe(*packet_id)) {
             Entry::Vacant(v) => {
                 return Err(SourceError::Response(ErrorKind::from(
                     ProtoErrorKind::UnexpectedResponse(packet.ty.clone())).into()));
@@ -135,11 +141,8 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
     }
 
     fn process_unsub_ack(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
-        let pid = match packet.headers.get("packet_id").unwrap() {
-            &Headers::PacketId(p) => p,
-            _ => unreachable!()
-        };
-        let (o, c) = match data.one_time.entry(OneTimeKey::Unsubscribe(pid)) {
+        let pid = packet.headers.get::<PacketId>().unwrap();
+        let (o, c) = match data.one_time.entry(OneTimeKey::Unsubscribe(*pid)) {
             Entry::Vacant(v) => {
                 return Err(SourceError::Response(ErrorKind::from(
                     ProtoErrorKind::UnexpectedResponse(packet.ty.clone())).into()));
@@ -171,31 +174,22 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         // Scream for the publish
         match packet.flags.qos() {
             QualityOfService::QoS0 => {
-                let topic = match packet.headers.get("topic_name").unwrap() {
-                    &Headers::TopicName(ref t) => t.clone(),
-                    _ => unreachable!()
-                };
+                let topic = packet.headers.get::<TopicName>().unwrap();
                 let payload = match packet.payload {
                     Payload::Application(d) => Bytes::from(d),
                     _ => unreachable!()
                 };
                 for &(ref filter, ref sender) in data.subscriptions.values() {
                     if filter.match_topic(&topic) {
-                        let _ = sender.send(Ok((topic.clone().into(), payload.clone())));
+                        let _ = sender.send(Ok(((*topic).into(), payload.clone())));
                     }
                 }
                 Ok(None)
             },
             QualityOfService::QoS1 => {
-                let id = match packet.headers.get("packet_id").unwrap() {
-                    &Headers::PacketId(p) => p,
-                    _ => unreachable!()
-                };
+                let id = packet.headers.get::<PacketId>().unwrap();
 
-                let topic = match packet.headers.get("topic_name").unwrap() {
-                    &Headers::TopicName(ref t) => t.clone(),
-                    _ => unreachable!()
-                };
+                let topic = packet.headers.get::<TopicName>().unwrap();
                 let payload = match packet.payload {
                     Payload::Application(d) => Bytes::from(d),
                     _ => unreachable!()
@@ -207,34 +201,28 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
                 }
 
                 // Send back an acknowledgement
-                Ok(Some(MqttPacket::pub_ack_packet(id)))
+                Ok(Some(MqttPacket::pub_ack_packet(*id)))
             },
             QualityOfService::QoS2 => {
-                let id = match packet.headers.get("packet_id").unwrap() {
-                    &Headers::PacketId(p) => p,
-                    _ => unreachable!()
-                };
+                let id = packet.headers.get::<PacketId>().unwrap();
 
                 // Check if we have an existing publish with the same id
                 if data.server_publish_state.contains_key(&id) {
                     return Err(SourceError::Response(ProtoErrorKind::QualityOfServiceError(
                         packet.flags.qos(),
-                        format!("Duplicate publish recieved with same Packet ID: {}", id)
+                        format!("Duplicate publish recieved with same Packet ID: {}", *id)
                     ).into()))
                 } else {
-                    data.server_publish_state.insert(id, PublishState::Received(packet));
+                    data.server_publish_state.insert(*id, PublishState::Received(packet));
                     // Send PUBREC
-                    Ok(Some(MqttPacket::pub_rec_packet(id)))
+                    Ok(Some(MqttPacket::pub_rec_packet(*id)))
                 }
             }
         }
     }
 
     fn process_pub_ack(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
-        let id = match packet.headers.get("packet_id").unwrap() {
-            &Headers::PacketId(p) => p,
-            _ => unreachable!()
-        };
+        let id = packet.headers.get::<PacketId>().unwrap();
         if data.client_publish_state.contains_key(&id) {
             let (p_key, sender) = match data.client_publish_state.remove(&id) {
                 Some(PublishState::Sent(p, s)) => (p, s),
@@ -262,23 +250,17 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
     }
 
     fn process_pub_rec(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
-        let id = match packet.headers.get("packet_id").unwrap() {
-            &Headers::PacketId(p) => p,
-            _ => unreachable!()
-        };
+        let id = packet.headers.get::<PacketId>().unwrap();
         if data.client_publish_state.contains_key(&id) {
             let (p_key, sender) = match data.client_publish_state.remove(&id) {
                 Some(PublishState::Sent(p, s)) => (p, s),
                 _ => unreachable!()
             };
             if let Err(e) = data.persistence.remove(p_key) {
-                if let Some(s) = sender {
-                    let _ = s.send(Err(e).chain_err(|| ErrorKind::PersistenceError));
-                }
                 return Err(ErrorKind::PersistenceError.into())
                     .map_err(|e| SourceError::Response(e))
             }
-            let rel = MqttPacket::pub_rel_packet(id);
+            let rel = MqttPacket::pub_rel_packet(*id);
             let ser = bincode::serialize(&rel, bincode::Infinite).unwrap();
             let key = match data.persistence.append(ser) {
                 Ok(k) => k,
@@ -290,7 +272,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
                         .map_err(|e| SourceError::Response(e))
                 }
             };
-            let _ = data.client_publish_state.insert(id, PublishState::Released(key, sender));
+            let _ = data.client_publish_state.insert(*id, PublishState::Released(key, sender));
 
             Ok(Some(rel))
         } else {
@@ -300,20 +282,14 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
     }
 
     fn process_pub_rel(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
-        let id = match packet.headers.get("packet_id").unwrap() {
-            &Headers::PacketId(p) => p,
-            _ => unreachable!()
-        };
+        let id = packet.headers.get::<PacketId>().unwrap();
         if data.server_publish_state.contains_key(&id) {
             let orig = match data.server_publish_state.remove(&id) {
                 Some(PublishState::Received(o)) => o,
                 _ => unreachable!()
             };
 
-            let topic = match orig.headers.get("topic_name").unwrap() {
-                &Headers::TopicName(ref t) => t.clone(),
-                _ => unreachable!()
-            };
+            let topic = orig.headers.get::<TopicName>().unwrap();
             let payload = match orig.payload {
                 Payload::Application(d) => Bytes::from(d),
                 _ => unreachable!()
@@ -324,7 +300,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
                 }
             }
 
-            Ok(Some(MqttPacket::pub_comp_packet(id)))
+            Ok(Some(MqttPacket::pub_comp_packet(*id)))
         } else {
             bail!(SourceError::Response(ProtoErrorKind::UnexpectedResponse(
                 packet.ty.clone()).into()))
@@ -332,10 +308,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
     }
 
     fn process_pub_comp(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
-        let id = match packet.headers.get("packet_id").unwrap() {
-            &Headers::PacketId(p) => p,
-            _ => unreachable!()
-        };
+        let id = packet.headers.get::<PacketId>().unwrap();
         if data.client_publish_state.contains_key(&id) {
             let (p_key, sender) = match data.client_publish_state.remove(&id) {
                 Some(PublishState::Released(p, s)) => (p, s),

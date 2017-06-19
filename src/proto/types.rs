@@ -3,6 +3,7 @@ use std::fmt;
 use ::bytes::{Bytes, BytesMut, BigEndian, BufMut};
 use ::errors::{Error, ErrorKind};
 use ::linked_hash_map::LinkedHashMap;
+use ::errors::Result;
 
 static CRC_0_MESSAGE: &'static str = "0x00 Connection Accepted";
 static CRC_1_MESSAGE: &'static str = "0x01 Connection Refused, unacceptable protocol version";
@@ -10,8 +11,6 @@ static CRC_2_MESSAGE: &'static str = "0x02 Connection Refused, identifier reject
 static CRC_3_MESSAGE: &'static str = "0x03 Connection Refused, Server unavailable";
 static CRC_4_MESSAGE: &'static str = "0x04 Connection Refused, bad user name or password";
 static CRC_5_MESSAGE: &'static str = "0x05 Connection Refused, not authorized";
-
-pub type HeaderMap = LinkedHashMap<String, Headers>;
 
 bitflags! {
     #[derive(Serialize, Deserialize)]
@@ -41,18 +40,18 @@ impl PacketFlags {
         }
     }
 
-    pub fn retain(&self) -> bool {
+    pub fn is_retain(&self) -> bool {
         self.intersects(RET)
     }
 
-    pub fn duplicate(&self) -> bool {
+    pub fn is_duplicate(&self) -> bool {
         self.intersects(DUP)
     }
 }
 
 bitflags! {
     #[derive(Serialize, Deserialize)]
-    pub flags ConnectFlags: u8 {
+    pub flags ConnFlags: u8 {
         const USERNAME    = 0b10000000,
         const PASSWORD    = 0b01000000,
         const WILL_RETAIN = 0b00100000,
@@ -98,7 +97,7 @@ enum_from_primitive! {
 
 enum_from_primitive! {
     #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-    pub enum ConnectReturnCode {
+    pub enum ConnRetCode {
         Accepted          = 0,
         BadProtoVersion   = 1,
         ClientIdRejected  = 2,
@@ -108,10 +107,10 @@ enum_from_primitive! {
     }
 }
 
-impl ConnectReturnCode {
+impl ConnRetCode {
     pub fn is_ok(&self) -> bool {
         match self {
-            &ConnectReturnCode::Accepted => true,
+            &ConnRetCode::Accepted => true,
             _ => false
         }
     }
@@ -119,17 +118,28 @@ impl ConnectReturnCode {
     pub fn is_err(&self) -> bool {
         !self.is_ok()
     }
+
+    pub fn as_u8(&self) -> u8 {
+        match *self {
+            ConnRetCode::Accepted          => 0,
+            ConnRetCode::BadProtoVersion   => 1,
+            ConnRetCode::ClientIdRejected  => 2,
+            ConnRetCode::ServerUnavailable => 3,
+            ConnRetCode::BadCredentials    => 4,
+            ConnRetCode::Unauthorized      => 5
+        }
+    }
 }
 
-impl fmt::Display for ConnectReturnCode {
+impl fmt::Display for ConnRetCode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            &ConnectReturnCode::Accepted => write!(f, "{}", CRC_0_MESSAGE),
-            &ConnectReturnCode::BadProtoVersion => write!(f, "{}", CRC_1_MESSAGE),
-            &ConnectReturnCode::ClientIdRejected => write!(f, "{}", CRC_2_MESSAGE),
-            &ConnectReturnCode::ServerUnavailable => write!(f, "{}", CRC_3_MESSAGE),
-            &ConnectReturnCode::BadCredentials => write!(f, "{}", CRC_4_MESSAGE),
-            &ConnectReturnCode::Unauthorized => write!(f, "{}", CRC_5_MESSAGE)
+            &ConnRetCode::Accepted => write!(f, "{}", CRC_0_MESSAGE),
+            &ConnRetCode::BadProtoVersion => write!(f, "{}", CRC_1_MESSAGE),
+            &ConnRetCode::ClientIdRejected => write!(f, "{}", CRC_2_MESSAGE),
+            &ConnRetCode::ServerUnavailable => write!(f, "{}", CRC_3_MESSAGE),
+            &ConnRetCode::BadCredentials => write!(f, "{}", CRC_4_MESSAGE),
+            &ConnRetCode::Unauthorized => write!(f, "{}", CRC_5_MESSAGE)
         }
     }
 }
@@ -137,8 +147,16 @@ impl fmt::Display for ConnectReturnCode {
 enum_from_primitive! {
     #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
     #[allow(non_camel_case_types)]
-    pub enum ProtocolLevel {
+    pub enum ProtoLvl {
         V3_1_1 = 4
+    }
+}
+
+impl ProtoLvl {
+    pub fn as_u8(&self) -> u8 {
+        match *self {
+            ProtoLvl::V3_1_1 => 4
+        }
     }
 }
 
@@ -203,49 +221,21 @@ impl LWTMessage {
         }
     }
 
-    pub fn encode_flags(&self) -> ConnectFlags {
-        let mut flags = ConnectFlags::from_bits_truncate(self.qos.into());
+    pub fn encode_flags(&self) -> ConnFlags {
+        let mut flags = ConnFlags::from_bits_truncate(self.qos.into());
         if self.retain {
-            flags.insert(WILL_RETAIN)
+            flags.insert(WILL_RETAIN);
         }
         flags
     }
 
-    pub fn encode_topic(&self) -> Bytes {
-        self.topic.encode()
+    pub fn encode_topic(&self, out: &mut BytesMut) {
+        self.topic.encode(out);
     }
 
-    pub fn encode_message(&self) -> Bytes {
-        self.message.clone()
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub enum Headers {
-    ConnFlags(ConnectFlags),
-    ConnAckFlags(ConnAckFlags),
-    ConnRetCode(ConnectReturnCode),
-    PacketId(u16),
-    ProtoName,
-    ProtoLevel(ProtocolLevel),
-    KeepAlive(u16),
-    TopicName(MqttString)
-}
-
-impl Headers {
-    pub fn encode(&self) -> Bytes {
-        let mut b = BytesMut::with_capacity(32);
-        match *self {
-            Headers::ConnFlags(ref fl) => b.put_u8(fl.bits()),
-            Headers::ConnAckFlags(ref fl) => b.put_u8(fl.bits()),
-            Headers::ConnRetCode(ref c) => b.put_u8((*c as u32) as u8),
-            Headers::PacketId(ref id) => b.put_u16::<BigEndian>(*id),
-            Headers::ProtoName => b.put(MqttString::from_str("MQTT").unwrap().encode()),
-            Headers::ProtoLevel(ref lvl) => b.put_u8((*lvl as u32) as u8),
-            Headers::KeepAlive(ref ka) => b.put_u16::<BigEndian>(*ka),
-            Headers::TopicName(ref s) => b.put(s.encode())
-        }
-        b.freeze()
+    pub fn encode_message(&self, out: &mut BytesMut) {
+        out.reserve(self.message.len());
+        out.put(self.message);
     }
 }
 
@@ -257,7 +247,7 @@ impl MqttString {
         MqttString(String::new())
     }
 
-    pub fn from_str(s: &str) -> Result<MqttString, Error> {
+    pub fn from_str(s: &str) -> Result<MqttString> {
         if s.len() > 0xFFFF {
             bail!(ErrorKind::StringConversionError)
         } else {
@@ -265,11 +255,16 @@ impl MqttString {
         }
     }
 
-    pub fn encode(&self) -> Bytes {
-        let mut b = BytesMut::with_capacity(self.len() + 2);
-        b.put_u16::<BigEndian>(self.len() as u16);
-        b.put(&self.0);
-        b.freeze()
+    pub fn from_str_lossy(s: &str) -> MqttString {
+        let string = String::from(s);
+        string.truncate(0xFFFF);
+        MqttString(string)
+    }
+
+    pub fn encode(&self, out: &mut BytesMut) {
+        out.reserve(self.len() + 2);
+        out.put_u16::<BigEndian>(self.len() as u16);
+        out.put_slice(self.as_bytes());
     }
 }
 
@@ -296,14 +291,14 @@ pub struct Subscription {
 }
 
 impl Subscription {
-    pub fn encode_all(&self) -> Bytes {
-        let mut bytes = BytesMut::from(self.topic.encode());
-        bytes.put_u8(self.qos.into());
-        bytes.freeze()
+    pub fn encode_all(&self, out: &mut BytesMut) {
+        out.reserve(self.topic.len() + 1);
+        self.topic.encode(out);
+        out.put_u8(self.qos.into());
     }
 
-    pub fn encode_topic(&self) -> Bytes {
-        BytesMut::from(self.topic.encode()).freeze()
+    pub fn encode_topic(&self, out: &mut BytesMut) {
+        self.topic.encode(out);
     }
 }
 
@@ -318,37 +313,35 @@ pub enum Payload {
 }
 
 impl Payload {
-    pub fn encode(&self) -> Bytes {
-        let mut collect = BytesMut::with_capacity(4096);
+    pub fn encode(&self, out: &mut BytesMut) {
         match self {
             &Payload::Connect(ref cid, ref will, ref creds) => {
-                collect.extend(cid.encode());
+                cid.encode(out);
                 if let &Some((ref topic, ref msg)) = will {
-                    collect.extend(topic.encode());
-                    collect.extend(msg);
+                    topic.encode(out);
+                    out.reserve(msg.len());
+                    out.put(msg);
                 }
                 if let &Some((ref user, ref p)) = creds {
-                    collect.extend(user.encode());
+                    user.encode(out);
 
                     if let &Some(ref pass) = p {
-                        collect.extend(pass.encode());
+                        pass.encode(out);
                     }
                 }
             },
             &Payload::Subscribe(ref subs) => {
                 for sub in subs {
-                    collect.extend(sub.topic.encode());
-                    collect.extend(vec![u8::from(sub.qos)]);
+                    sub.encode_all(out);
                 }
             },
             &Payload::Unsubscribe(ref unsubs) => {
                 for unsub in unsubs {
-                    collect.extend(unsub.encode());
+                    unsub.encode(out);
                 }
             }
             _ => {}
-        };
-        collect.freeze()
+        }
     }
 }
 

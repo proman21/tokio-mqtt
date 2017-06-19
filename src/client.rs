@@ -12,7 +12,7 @@ use ::persistence::Persistence;
 
 pub struct ClientConfig {
     pub keep_alive: u16,
-    pub version: ProtocolLevel,
+    pub version: ProtoLvl,
     pub lwt: Option<(String, QualityOfService, bool, Bytes)>,
     pub creds: Credentials<String>,
     pub clean: bool,
@@ -23,7 +23,7 @@ impl Default for ClientConfig {
     fn default() -> ClientConfig {
         ClientConfig {
             keep_alive: 0,
-            version: ProtocolLevel::V3_1_1,
+            version: ProtoLvl::V3_1_1,
             lwt: None,
             creds: None,
             clean: true,
@@ -52,7 +52,7 @@ impl ClientConfig {
     }
 
     /// Specify which version of the MQTT protocol to use when communicating with the server.
-    pub fn version(&mut self, v: ProtocolLevel) -> &mut ClientConfig {
+    pub fn version(&mut self, v: ProtoLvl) -> &mut ClientConfig {
         self.version = v;
         self
     }

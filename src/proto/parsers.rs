@@ -1,6 +1,7 @@
 use ::nom::{IResult, ErrorKind, Needed, be_u16, rest};
 use ::enum_primitive::FromPrimitive;
 use super::types::*;
+use super::Headers;
 
 /// Attempts to decode a variable length encoded number from the provided byte slice.
 ///
@@ -85,80 +86,63 @@ fn error(input: &[u8], e: ErrorKind) -> IResult<&[u8], ()> {
 }
 
 named!(vle<&[u8], usize>, call!(decode_vle));
-named!(bytes, do_parse!(
-    length: be_u16        >>
-    bytes:  take!(length) >>
-    (bytes)
-));
-named!(string<&[u8], &str>, do_parse!(
-    length: be_u16        >>
-    s:  take_str!(length) >>
-    (s)
-));
-named!(packet_id<&[u8], Headers>, map!(be_u16, |n| Headers::PacketId(n)));
-named!(conn_ack_flags<&[u8], Headers>, map!(
-    map_opt!(take!(1), |b: &[u8]| ConnAckFlags::from_bits(b[0])),
-    |fl| Headers::ConnAckFlags(fl)
-));
-named!(conn_ret_code<&[u8], Headers>, map!(
-    map_opt!(take!(1), |b: &[u8]| ConnectReturnCode::from_u8(b[0])),
-    |rc| Headers::ConnRetCode(rc)
-));
-named!(topic_name<&[u8], Headers>, map!(
-    map_res!(string, |s| MqttString::from_str(s)),
-    |tn| Headers::TopicName(tn)
-));
+named!(bytes, length_bytes!(be_u16));
+
+named!(packet_id, take!(2));
+named!(conn_ack_flags, take!(1));
+named!(conn_ret_code, take!(1));
+named!(topic_name, length_bytes!(be_u16));
 named!(packet_type<&[u8], PacketType>, map_opt!(
     bits!(take_bits!(u8, 4)), |b| PacketType::from_u8(b)));
 named!(packet_flags<&[u8], PacketFlags>, map_opt!(
     bits!(take_bits!(u8, 4)), |b| PacketFlags::from_bits(b)));
-named!(conn_ack_hdrs<&[u8], HeaderMap>, do_parse!(
+named!(conn_ack_hdrs<&[u8], Headers>, do_parse!(
     flags: conn_ack_flags                 >>
     ret_code: conn_ret_code               >>
     ({
-        let mut headers = HeaderMap::new();
-        headers.insert("connect_ack_flags".into(), flags);
-        headers.insert("connect_return_code".into(), ret_code);
+        let mut headers = Headers::new();
+        headers.set_raw("connect_ack_flags", flags);
+        headers.set_raw("connect_return_code", ret_code);
         headers
     })
 ));
-named_args!(publish_hdrs(qos12: bool) <HeaderMap>, do_parse!(
+named_args!(publish_hdrs(qos12: bool) <Headers>, do_parse!(
     topic: topic_name            >>
     pid: cond!(qos12, packet_id) >>
     ({
-        let mut headers = HeaderMap::new();
-        headers.insert("topic_name".into(), topic);
+        let mut headers = Headers::new();
+        headers.set_raw("topic_name", topic);
         if let Some(p) = pid {
-            headers.insert("packet_id".into(), p);
+            headers.set_raw("packet_id", p);
         }
         headers
     })
 ));
-named!(pub_steps_hdrs<&[u8], HeaderMap>, do_parse!(
+named!(pub_steps_hdrs<&[u8], Headers>, do_parse!(
     id: packet_id            >>
     ({
-        let mut headers = HeaderMap::new();
-        headers.insert("packet_id".into(), id);
+        let mut headers = Headers::new();
+        headers.set_raw("packet_id", id);
         headers
     })
 ));
-named!(sub_ack_hdrs<&[u8], HeaderMap>, do_parse!(
+named!(sub_ack_hdrs<&[u8], Headers>, do_parse!(
     id: packet_id            >>
     ({
-        let mut headers = HeaderMap::new();
-        headers.insert("packet_id".into(), id);
+        let mut headers = Headers::new();
+        headers.set_raw("packet_id", id);
         headers
     })
 ));
-named!(unsub_ack_hdrs<&[u8], HeaderMap>, do_parse!(
+named!(unsub_ack_hdrs<&[u8], Headers>, do_parse!(
     id: packet_id            >>
     ({
-        let mut headers = HeaderMap::new();
-        headers.insert("packet_id".into(), id);
+        let mut headers = Headers::new();
+        headers.set_raw("packet_id", id);
         headers
     })
 ));
-named_args!(packet_headers(ty: PacketType, fl: PacketFlags) <HeaderMap>, switch!(value!(ty),
+named_args!(packet_headers(ty: PacketType, fl: PacketFlags) <Headers>, switch!(value!(ty),
     PacketType::ConnAck => call!(conn_ack_hdrs)                          |
     PacketType::Publish => call!(publish_hdrs, fl.contains(QOS1 & QOS2)) |
     PacketType::PubAck => call!(pub_steps_hdrs)                          |
@@ -167,8 +151,8 @@ named_args!(packet_headers(ty: PacketType, fl: PacketFlags) <HeaderMap>, switch!
     PacketType::PubComp  => call!(pub_steps_hdrs)                        |
     PacketType::SubAck   => call!(sub_ack_hdrs)                          |
     PacketType::UnsubAck => call!(unsub_ack_hdrs)                        |
-    PacketType::PingResp => value!(HeaderMap::new())                     |
-    _                    => map!(call!(error, ErrorKind::Custom(2)), |_| HeaderMap::new())
+    PacketType::PingResp => value!(Headers::new())                     |
+    _                    => map!(call!(error, ErrorKind::Custom(2)), |_| Headers::new())
 ));
 
 named_args!(packet_payload(ty: PacketType) <Payload>, switch!(value!(ty),
@@ -186,7 +170,7 @@ fn count_bytes(input: &[u8]) -> IResult<&[u8], usize> {
     IResult::Done(input, size)
 }
 
-named!(pub packet<&[u8], (PacketType, PacketFlags, HeaderMap, Payload)>, do_parse!(
+named!(pub packet<&[u8], (PacketType, PacketFlags, Headers, Payload)>, do_parse!(
     ty: packet_type                              >>
     flags: packet_flags                          >>
     re_len: vle                                  >>
