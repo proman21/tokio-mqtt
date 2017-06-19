@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
+use std::sync::Arc;
 use ::futures::{Poll, Async};
 use ::futures::future::{Future, BoxFuture, ok, err};
 use ::futures::stream::{Stream, FuturesUnordered, futures_unordered};
@@ -33,7 +34,7 @@ use super::request::RequestProcessor;
 enum State {
     Running(UnboundedSender<ClientRequest>),
     Disconnecting,
-    Stopped
+    Stopped(Option<Arc<Error>>)
 }
 
 pub struct LoopClient {
@@ -255,74 +256,79 @@ impl<I, P> Future for Loop<I, P> where I: AsyncRead + AsyncWrite + Send + 'stati
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            let res = match self.sources.poll() {
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Ok(Async::Ready(r)) => r,
-                Err(e) => {
-                    self.status = LoopStatus::Error(Arc<e>);
-                    continue
-                }
-            };
-            match res {
-                Some(SourceItem::Response(strm)) => {
-                    self.sources.push(ResponseProcessor::new(strm.into_future(),
-                        self.data.clone()).boxed());
-                },
-                Some(SourceItem::Request(mut rx, disconnect)) => {
-                    // Move the loop into disconnect mode if we get a disconnect
-                    if let Some((time, ret)) = disconnect {
-                        // Start a timeout for the disconnect
-                        let timeout = time.and_then(|t| Timeout::new(Duration::from_secs(t), &self.handle).ok());
-                        if let Some(timer) = timeout {
-                            let timeout_fut = Loop::<I,P>::make_timeout(timer, TimeoutType::Disconnect);
-                            self.sources.push(timeout_fut);
+        loop { match self.status {
+            LoopStatus::Running => {
+                let res = match self.sources.poll() {
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                    Ok(Async::Ready(r)) => r,
+                    Err(e) => {
+                        if e.is_transient() {
+                            unimplemented!()
+                        } else {
+                            self.status = LoopStatus::Error(Arc::new<e>);
                         }
-                        // Move state to Disconnecting
-                        self.status = LoopStatus::Disconnecting(ret);
-                    } else {
-                        // Check if we need a timeout after this request
-                        match rx.peek() {
-                            Ok(Async::Ready(Some(_))) => self.timer_flag = None,
-                            Ok(Async::Ready(None)) | Ok(Async::NotReady) => {
-                                // Set the timeout flag
-                                let id = self.timer_flag.take().map(|t| t + 1).unwrap_or(0);
-                                self.timer_flag = Some(id);
-                                // Make the timeout
-                                let timeout = Timeout::new(Duration::from_secs(self.keep_alive),
-                                    &self.handle).ok();
-                                if let Some(timer) = timeout {
-                                    let timeout_fut = Loop::<I,P>::make_timeout(timer, TimeoutType::Disconnect);
-                                    self.sources.push(timeout_fut);
-                                }
-                            },
-                            _ => {}
-                        }
-                    };
-                    let data = self.data.clone();
-                    self.sources.push(Loop::request_processor_wrapper(rx, data));
-                },
-                Some(SourceItem::Timeout(t)) => {
-                    // Check the type of the timeout, either Ping or Disconnect
-                    match t {
-                        TimeoutType::Ping(id) => {
-                            // Send a ping request if this timer is valid
-                            match self.timer_flag {
-                                Some(x) if x == id => {
-
+                    }
+                };
+                match res {
+                    Some(SourceItem::Response(strm)) => {
+                        self.sources.push(ResponseProcessor::new(strm.into_future(),
+                            self.data.clone()).boxed());
+                    },
+                    Some(SourceItem::Request(mut rx, disconnect)) => {
+                        // Move the loop into disconnect mode if we get a disconnect
+                        if let Some((time, ret)) = disconnect {
+                            // Start a timeout for the disconnect
+                            let timeout = time.and_then(|t| Timeout::new(Duration::from_secs(t), &self.handle).ok());
+                            if let Some(timer) = timeout {
+                                let timeout_fut = Loop::<I,P>::make_timeout(timer, TimeoutType::Disconnect);
+                                self.sources.push(timeout_fut);
+                            }
+                            // Move state to Disconnecting
+                            self.status = LoopStatus::Disconnecting(ret);
+                        } else {
+                            // Check if we need a timeout after this request
+                            match rx.peek() {
+                                Ok(Async::Ready(Some(_))) => self.timer_flag = None,
+                                Ok(Async::Ready(None)) | Ok(Async::NotReady) => {
+                                    // Set the timeout flag
+                                    let id = self.timer_flag.take().map(|t| t + 1).unwrap_or(0);
+                                    self.timer_flag = Some(id);
+                                    // Make the timeout
+                                    let timeout = Timeout::new(Duration::from_secs(self.keep_alive),
+                                        &self.handle).ok();
+                                    if let Some(timer) = timeout {
+                                        let timeout_fut = Loop::<I,P>::make_timeout(timer, TimeoutType::Disconnect);
+                                        self.sources.push(timeout_fut);
+                                    }
                                 },
                                 _ => {}
                             }
-                        },
-                        TimeoutType::Disconnect => {
-                            // Shutdown all the queue stuff
+                        };
+                        let data = self.data.clone();
+                        self.sources.push(Loop::request_processor_wrapper(rx, data));
+                    },
+                    Some(SourceItem::Timeout(t)) => {
+                        // Check the type of the timeout, either Ping or Disconnect
+                        match t {
+                            TimeoutType::Ping(id) => {
+                                // Send a ping request if this timer is valid
+                                match self.timer_flag {
+                                    Some(x) if x == id => {
+
+                                    },
+                                    _ => {}
+                                }
+                            },
+                            TimeoutType::Disconnect => {
+                                // Shutdown all the queue stuff
+                            }
                         }
-                    }
-                },
-                None => {}
-            };
-            return Ok(Async::NotReady);
-        }
+                    },
+                    None => {}
+                };
+                return Ok(Async::NotReady);
+            }
+        }}
     }
 }
 
