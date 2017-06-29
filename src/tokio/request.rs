@@ -7,7 +7,7 @@ use ::bincode;
 
 use ::persistence::Persistence;
 use ::proto::{MqttPacket, PacketType, Headers, QualityOfService, PacketId};
-use ::errors::{Result, ErrorKind, ResultExt};
+use ::errors::{Error, Result, ErrorKind, ResultExt};
 use super::mqtt_loop::LoopData;
 use super::{
     SourceItem,
@@ -20,34 +20,54 @@ use super::{
 
 enum State {
     Processing((MqttPacket, Sender<Result<ClientReturn>>)),
-    Sending(MqttPacket),
+    Sending((MqttPacket, Sender<Result<ClientReturn>>)),
     Writing
 }
 
 pub struct RequestProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'static,
     P: Persistence {
     state: Take<State>,
-    data: FutMutex<LoopData<I, P>>,
-    stream: Option<ClientQueue>
+    data: FutMutex<LoopData<I, P>>
 }
 
 impl<I, P> RequestProcessor<I, P> where I: AsyncRead + AsyncWrite + Send, P: Persistence {
-    pub fn new(req: (MqttPacket, Sender<Result<ClientReturn>>), data: FutMutex<LoopData<I, P>>,
-        stream: ClientQueue) -> RequestProcessor<I, P> {
+    pub fn new(req: (MqttPacket, Sender<Result<ClientReturn>>), data: FutMutex<LoopData<I, P>>) -> RequestProcessor<I, P> {
         RequestProcessor {
-            state: Take::new(State::Processing(req)),
-            data: data,
-            stream: Some(stream)
+            state: Take::new(State::Sending(req)),
+            data: data
         }
     }
 }
 
 impl<I, P> Future for RequestProcessor<I, P> where I: AsyncRead + AsyncWrite + Send, P: Persistence {
     type Item = SourceItem<I>;
-    type Error = SourceError;
+    type Error = SourceError<I>;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop { match self.state.take() {
+            State::Sending((packet, client)) => {
+                let mut data = match self.data.poll_lock() {
+                    Async::Ready(g) => g,
+                    Async::NotReady => {
+                        self.state = Take::new(State::Sending((packet, client)));
+                        return Ok(Async::NotReady)
+                    }
+                };
+                let c = packet.clone();
+                self.state = Take::new(match data.framed_write.start_send(c) {
+                    Ok(AsyncSink::Ready) => State::Processing((packet, client)),
+                    Ok(AsyncSink::NotReady(_)) => State::Sending((packet, client)),
+                    Err(e) => {
+                        match e {
+                            Error(ErrorKind::PacketEncodingError, _) => {
+                                let _ = client.send(Err(e));
+                                return Ok(Async::Ready(SourceItem::ProcessRequest(false)));
+                            },
+                            _ => return Err(SourceError::ProcessRequest(e))
+                        }
+                    }
+                })
+            },
             State::Processing((packet, client)) => {
                 // Get a lock on the data
                 let mut data = match self.data.poll_lock() {
@@ -84,7 +104,7 @@ impl<I, P> Future for RequestProcessor<I, P> where I: AsyncRead + AsyncWrite + S
                                     Ok(k) => k,
                                     Err(e) => {
                                         return Err(e).chain_err(|| ErrorKind::PersistenceError)
-                                            .map_err(|e| SourceError::Request(e))
+                                            .map_err(|e| SourceError::ProcessRequest(e))
                                     }
                                 };
                                 data.client_publish_state.insert(*id,
@@ -96,22 +116,7 @@ impl<I, P> Future for RequestProcessor<I, P> where I: AsyncRead + AsyncWrite + S
                     p @ _ => unreachable!()
                 };
 
-                self.state = Take::new(State::Sending(packet))
-            },
-            State::Sending(packet) => {
-                let mut data = match self.data.poll_lock() {
-                    Async::Ready(g) => g,
-                    Async::NotReady => {
-                        self.state = Take::new(State::Sending(packet));
-                        return Ok(Async::NotReady)
-                    }
-                };
-                let c = packet.clone();
-                self.state = Take::new(match data.framed_write.start_send(packet) {
-                    Ok(AsyncSink::Ready) => State::Writing,
-                    Ok(AsyncSink::NotReady(p)) => State::Sending(p),
-                    Err(e) => return Err(SourceError::Request(e))
-                })
+                self.state = Take::new(State::Writing)
             },
             State::Writing => {
                 let mut data = match self.data.poll_lock() {
@@ -122,8 +127,8 @@ impl<I, P> Future for RequestProcessor<I, P> where I: AsyncRead + AsyncWrite + S
                     }
                 };
                 try_ready!(data.framed_write.poll_complete()
-                    .map_err(|e| SourceError::Request(e)));
-                return Ok(Async::Ready(SourceItem::Request(self.stream.take().unwrap(), None)));
+                    .map_err(|e| SourceError::ProcessRequest(e)));
+                return Ok(Async::Ready(SourceItem::ProcessRequest(true)));
             }
         };}
     }

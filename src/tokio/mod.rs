@@ -7,6 +7,8 @@ pub use self::mqtt_loop::{Loop, LoopClient};
 pub use self::codec::MqttCodec;
 
 use std::ops::Deref;
+use std::sync::Arc;
+use std::result;
 
 use ::tokio_io::codec::Framed;
 use ::futures::stream::{SplitStream, SplitSink, Peekable};
@@ -21,7 +23,8 @@ use ::persistence::Persistence;
 
 type MqttFramedReader<I> = SplitStream<Framed<I, MqttCodec>>;
 type MqttFramedWriter<I> = SplitSink<Framed<I, MqttCodec>>;
-type SubscriptionSender = UnboundedSender<Result<SubItem>>;
+type SubscriptionSender = UnboundedSender<SubscriptionResult>;
+type SubscriptionResult = Result<SubItem>;
 type ClientQueue = Peekable<UnboundedReceiver<ClientRequest>>;
 
 pub enum TimeoutType {
@@ -34,33 +37,53 @@ pub enum ClientReturn {
     Ongoing(Vec<Result<(BoxMqttStream<Result<SubItem>>, QualityOfService)>>)
 }
 
-pub enum ClientRequest {
-    Normal(MqttPacket, Sender<Result<ClientReturn>>),
-    Disconnect(MqttPacket, Sender<Result<ClientReturn>>, Option<u64>)
+pub struct ClientRequest {
+    pub inital_ret: Sender<Result<()>>,
+    pub return_chan: Sender<Result<ClientReturn>>,
+    pub ty: ClientRequestType
+}
+
+impl ClientRequest {
+    pub fn new(initial: Sender<Result<()>>, ret: Sender<Result<ClientReturn>>, ty: ClientRequestType) -> ClientRequest {
+        ClientRequest {
+            inital_ret: initial,
+            return_chan: ret,
+            ty: ty
+        }
+    }
+}
+
+pub enum ClientRequestType {
+    Normal(MqttPacket),
+    Disconnect(Option<u64>)
 }
 
 /// These types act like tagged future items/errors, allowing the loop to know which future has
 /// returned. This simplifies the process of handling sources.
 pub enum SourceItem<I> {
-    Response(MqttFramedReader<I>),
-    Request(ClientQueue, Option<(Option<u64>, Sender<Result<ClientReturn>>)>),
+    GotResponse(MqttFramedReader<I>, Option<MqttPacket>),
+    ProcessResponse(bool),
+    GotRequest(ClientQueue, Option<ClientRequest>),
+    ProcessRequest(bool),
     Timeout(TimeoutType)
 }
 
-pub enum SourceError {
-    Response(Error),
-    Request(Error),
+pub enum SourceError<I> {
+    GotResponse(MqttFramedReader<I>, Error),
+    ProcessResponse(Error),
+    GotRequest(ClientQueue, Error),
+    ProcessRequest(Error),
     Timeout(Error)
 }
 
-impl Deref for SourceError {
-    type Target = Error;
-
-    fn deref(&self) -> &Self::Target {
-        match *self {
-            SourceError::Response(ref e) => e,
-            SourceError::Request(ref e) => e,
-            SourceError::Timeout(ref e) => e
+impl<I> From<SourceError<I>> for Error {
+    fn from(val: SourceError<I>) -> Error {
+        match val {
+            SourceError::GotResponse(_, e) => e,
+            SourceError::ProcessResponse(e) => e,
+            SourceError::GotRequest(_, e) => e,
+            SourceError::ProcessRequest(e) => e,
+            SourceError::Timeout(e) => e
         }
     }
 }

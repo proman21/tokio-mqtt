@@ -29,6 +29,7 @@ use ::types::SubItem;
 use super::MqttFramedReader;
 use super::mqtt_loop::LoopData;
 use super::{
+    SubscriptionResult,
     SourceItem,
     SourceError,
     ClientReturn,
@@ -38,7 +39,6 @@ use super::{
 };
 
 enum State {
-    Reading,
     Processing(MqttPacket),
     Sending(MqttPacket),
     Writing
@@ -47,27 +47,23 @@ enum State {
 /// This type will take a packet from the server and process it, returning the stream it came from
 pub struct ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'static, P: Persistence {
     state: Take<State>,
-    data: FutMutex<LoopData<I, P>>,
-    future: StreamFuture<MqttFramedReader<I>>,
-    stream: Option<MqttFramedReader<I>>
+    data: FutMutex<LoopData<I, P>>
 }
 
 impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'static,
     P: Persistence {
-    pub fn new(future: StreamFuture<MqttFramedReader<I>>, data: FutMutex<LoopData<I, P>>) -> ResponseProcessor<I, P> {
+    pub fn new(packet: MqttPacket, data: FutMutex<LoopData<I, P>>) -> ResponseProcessor<I, P> {
         ResponseProcessor {
-            state: Take::new(State::Reading),
+            state: Take::new(State::Processing(packet)),
             data: data,
-            future: future,
-            stream: None
         }
     }
 
-    fn process_conn_ack(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
+    fn process_conn_ack(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         // Check if we are awaiting a CONNACK
         let (_, client) = match data.one_time.entry(OneTimeKey::Connect) {
             Entry::Vacant(v) => {
-                return Err(SourceError::Response(ErrorKind::from(
+                return Err(SourceError::ProcessResponse(ErrorKind::from(
                         ProtoErrorKind::UnexpectedResponse(packet.ty.clone())
                 ).into()));
             },
@@ -81,7 +77,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
             if sess.is_clean() {
                 let _ = client.send(Ok(ClientReturn::Onetime(Some(packet))));
             } else {
-                let (tx, rx) = unbounded::<Result<SubItem>>();
+                let (tx, rx) = unbounded::<SubscriptionResult>();
                 let custom_rx = rx.map_err(|_| {
                     Error::from(ErrorKind::LoopCommsError)
                 });
@@ -92,17 +88,17 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
             }
             Ok(None)
         } else {
-            return Err(SourceError::Response(ErrorKind::from(
+            return Err(SourceError::ProcessResponse(ErrorKind::from(
                 ProtoErrorKind::ConnectionRefused(*crc)).into()
             ))
         }
     }
 
-    fn process_sub_ack(mut data: FutMutexGuard<LoopData<I,P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
+    fn process_sub_ack(mut data: FutMutexGuard<LoopData<I,P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let packet_id = packet.headers.get::<PacketId>().unwrap();
         let (o, c) = match data.one_time.entry(OneTimeKey::Subscribe(*packet_id)) {
             Entry::Vacant(v) => {
-                return Err(SourceError::Response(ErrorKind::from(
+                return Err(SourceError::ProcessResponse(ErrorKind::from(
                     ProtoErrorKind::UnexpectedResponse(packet.ty.clone())).into()));
             },
             Entry::Occupied(o) => o.remove()
@@ -119,12 +115,12 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         let mut collect = Vec::new();
         for (sub, ret) in orig.iter().zip(ret_codes.iter()) {
             if ret.is_ok() {
-                let (tx, rx) = unbounded::<Result<SubItem>>();
+                let (tx, rx) = unbounded::<SubscriptionResult>();
                 let custom_rx = rx.map_err(|_| {
                     Error::from(ErrorKind::LoopCommsError)
                 });
                 let filter = TopicFilter::from_string(&sub.topic).map_err(|e| {
-                    SourceError::Response(e)
+                    SourceError::ProcessResponse(e)
                 })?;
                 data.subscriptions.insert(sub.topic.clone().into(), (filter, tx));
                 collect.push(Ok((custom_rx.boxed(), sub.qos)));
@@ -140,11 +136,11 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         Ok(None)
     }
 
-    fn process_unsub_ack(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
+    fn process_unsub_ack(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let pid = packet.headers.get::<PacketId>().unwrap();
         let (o, c) = match data.one_time.entry(OneTimeKey::Unsubscribe(*pid)) {
             Entry::Vacant(v) => {
-                return Err(SourceError::Response(ErrorKind::from(
+                return Err(SourceError::ProcessResponse(ErrorKind::from(
                     ProtoErrorKind::UnexpectedResponse(packet.ty.clone())).into()));
             },
             Entry::Occupied(o) => o.remove()
@@ -161,7 +157,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         Ok(None)
     }
 
-    fn process_ping_resp(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
+    fn process_ping_resp(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         if let Entry::Occupied(o) = data.one_time.entry(
             OneTimeKey::PingReq) {
             let (_, client) = o.remove();
@@ -170,7 +166,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         Ok(None)
     }
 
-    fn process_pub(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
+    fn process_pub(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         // Scream for the publish
         match packet.flags.qos() {
             QualityOfService::QoS0 => {
@@ -181,7 +177,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
                 };
                 for &(ref filter, ref sender) in data.subscriptions.values() {
                     if filter.match_topic(&topic) {
-                        let _ = sender.send(Ok(((*topic).into(), payload.clone())));
+                        let _ = sender.send(Ok((topic.clone().into(), payload.clone())));
                     }
                 }
                 Ok(None)
@@ -208,7 +204,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
 
                 // Check if we have an existing publish with the same id
                 if data.server_publish_state.contains_key(&id) {
-                    return Err(SourceError::Response(ProtoErrorKind::QualityOfServiceError(
+                    return Err(SourceError::ProcessResponse(ProtoErrorKind::QualityOfServiceError(
                         packet.flags.qos(),
                         format!("Duplicate publish recieved with same Packet ID: {}", *id)
                     ).into()))
@@ -221,7 +217,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         }
     }
 
-    fn process_pub_ack(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
+    fn process_pub_ack(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let id = packet.headers.get::<PacketId>().unwrap();
         if data.client_publish_state.contains_key(&id) {
             let (p_key, sender) = match data.client_publish_state.remove(&id) {
@@ -239,17 +235,17 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
                         let _ = s.send(Err(e).chain_err(|| ErrorKind::PersistenceError));
                     }
                     return Err(ErrorKind::PersistenceError.into())
-                        .map_err(|e| SourceError::Response(e))
+                        .map_err(|e| SourceError::ProcessResponse(e))
                 }
             }
             Ok(None)
         } else {
-            bail!(SourceError::Response(ProtoErrorKind::UnexpectedResponse(
+            bail!(SourceError::ProcessResponse(ProtoErrorKind::UnexpectedResponse(
                 packet.ty.clone()).into()))
         }
     }
 
-    fn process_pub_rec(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
+    fn process_pub_rec(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let id = packet.headers.get::<PacketId>().unwrap();
         if data.client_publish_state.contains_key(&id) {
             let (p_key, sender) = match data.client_publish_state.remove(&id) {
@@ -258,7 +254,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
             };
             if let Err(e) = data.persistence.remove(p_key) {
                 return Err(ErrorKind::PersistenceError.into())
-                    .map_err(|e| SourceError::Response(e))
+                    .map_err(|e| SourceError::ProcessResponse(e))
             }
             let rel = MqttPacket::pub_rel_packet(*id);
             let ser = bincode::serialize(&rel, bincode::Infinite).unwrap();
@@ -269,19 +265,19 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
                         let _ = s.send(Err(e).chain_err(|| ErrorKind::PersistenceError));
                     }
                     return Err(ErrorKind::PersistenceError.into())
-                        .map_err(|e| SourceError::Response(e))
+                        .map_err(|e| SourceError::ProcessResponse(e))
                 }
             };
             let _ = data.client_publish_state.insert(*id, PublishState::Released(key, sender));
 
             Ok(Some(rel))
         } else {
-            bail!(SourceError::Response(ProtoErrorKind::UnexpectedResponse(
+            bail!(SourceError::ProcessResponse(ProtoErrorKind::UnexpectedResponse(
                 packet.ty.clone()).into()))
         }
     }
 
-    fn process_pub_rel(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
+    fn process_pub_rel(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let id = packet.headers.get::<PacketId>().unwrap();
         if data.server_publish_state.contains_key(&id) {
             let orig = match data.server_publish_state.remove(&id) {
@@ -302,12 +298,12 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
 
             Ok(Some(MqttPacket::pub_comp_packet(*id)))
         } else {
-            bail!(SourceError::Response(ProtoErrorKind::UnexpectedResponse(
+            bail!(SourceError::ProcessResponse(ProtoErrorKind::UnexpectedResponse(
                 packet.ty.clone()).into()))
         }
     }
 
-    fn process_pub_comp(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError> {
+    fn process_pub_comp(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let id = packet.headers.get::<PacketId>().unwrap();
         if data.client_publish_state.contains_key(&id) {
             let (p_key, sender) = match data.client_publish_state.remove(&id) {
@@ -325,12 +321,12 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
                         let _ = s.send(Err(e).chain_err(|| ErrorKind::PersistenceError));
                     }
                     return Err(ErrorKind::PersistenceError.into())
-                        .map_err(|e| SourceError::Response(e))
+                        .map_err(|e| SourceError::ProcessResponse(e))
                 }
             }
             Ok(None)
         } else {
-            bail!(SourceError::Response(ProtoErrorKind::UnexpectedResponse(
+            bail!(SourceError::ProcessResponse(ProtoErrorKind::UnexpectedResponse(
                 packet.ty.clone()).into()))
         }
     }
@@ -339,23 +335,10 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
 impl<I, P> Future for ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'static,
     P: Persistence {
     type Item = SourceItem<I>;
-    type Error = SourceError;
+    type Error = SourceError<I>;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop { match self.state.take() {
-            State::Reading => {
-                let (packet, stream) = match self.future.poll() {
-                    Ok(Async::NotReady) => return Ok(Async::NotReady),
-                    Ok(Async::Ready((Some(r), s))) => (r, s),
-                    Ok(Async::Ready((None, _))) => return Err(SourceError::Response(
-                        ErrorKind::UnexpectedDisconnect.into())),
-                    Err((e, _)) => {
-                        return Err(SourceError::Response(ErrorKind::LoopCommsError.into()))
-                    }
-                };
-                self.stream = Some(stream);
-                self.state = Take::new(State::Processing(packet));
-            },
             State::Processing(packet) => {
                 // Get a lock on the data
                 let data = match self.data.poll_lock() {
@@ -365,7 +348,7 @@ impl<I, P> Future for ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + 
                         return Ok(Async::NotReady)
                     }
                 };
-                packet.validate().map_err(|e| SourceError::Response(e))?;
+                packet.validate().map_err(|e| SourceError::ProcessResponse(e))?;
                 let state = match packet {
                     p @ MqttPacket{ty: PacketType::ConnAck, ..} =>{
                         ResponseProcessor::process_conn_ack(data, p)?
@@ -394,14 +377,14 @@ impl<I, P> Future for ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + 
                     p @ MqttPacket{ty: PacketType::PubComp, ..} => {
                         ResponseProcessor::process_pub_comp(data, p)?
                     },
-                    p @ _ => return Err(SourceError::Response(ErrorKind::from(
+                    p @ _ => return Err(SourceError::ProcessResponse(ErrorKind::from(
                         ProtoErrorKind::UnexpectedResponse(p.ty.clone())
                     ).into()))
                 };
                 if let Some(s) = state {
                     self.state = Take::new(State::Sending(s));
                 } else {
-                    return Ok(Async::Ready(SourceItem::Response(self.stream.take().unwrap())));
+                    return Ok(Async::Ready(SourceItem::ProcessResponse(false)));
                 }
             },
             State::Sending(packet) => {
@@ -415,7 +398,7 @@ impl<I, P> Future for ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + 
                 self.state = Take::new(match data.framed_write.start_send(packet) {
                     Ok(AsyncSink::Ready) => State::Writing,
                     Ok(AsyncSink::NotReady(p)) => State::Sending(p),
-                    Err(e) => return Err(SourceError::Request(e))
+                    Err(e) => return Err(SourceError::ProcessResponse(e))
                 })
             },
             State::Writing => {
@@ -427,8 +410,8 @@ impl<I, P> Future for ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + 
                     }
                 };
                 try_ready!(data.framed_write.poll_complete()
-                    .map_err(|e| SourceError::Response(e)));
-                return Ok(Async::Ready(SourceItem::Response(self.stream.take().unwrap())));
+                    .map_err(|e| SourceError::ProcessResponse(e)));
+                return Ok(Async::Ready(SourceItem::ProcessResponse(true)));
             }
         };}
     }
