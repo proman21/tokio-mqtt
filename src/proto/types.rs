@@ -235,7 +235,7 @@ impl LWTMessage {
 
     pub fn encode_message(&self, out: &mut BytesMut) {
         out.reserve(self.message.len());
-        out.put(self.message);
+        out.put(self.message.slice_from(0));
     }
 }
 
@@ -256,7 +256,7 @@ impl MqttString {
     }
 
     pub fn from_str_lossy(s: &str) -> MqttString {
-        let string = String::from(s);
+        let mut string = String::from(s);
         string.truncate(0xFFFF);
         MqttString(string)
     }

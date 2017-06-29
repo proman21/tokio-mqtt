@@ -34,6 +34,10 @@ error_chain! {
             description("Loop unexpectedly aborted")
         }
 
+        LoopError {
+            description("An error occurred while processing another request")
+        }
+
         UnexpectedDisconnect {
             description("Network connection to server ended unexpectedly")
         }
