@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::result;
 
 use ::tokio_io::codec::Framed;
+use ::futures::Future;
 use ::futures::stream::{SplitStream, SplitSink, Peekable};
 use ::futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
 use ::futures::sync::oneshot::Sender;
@@ -18,23 +19,19 @@ use ::regex::{escape, Regex};
 
 use ::errors::{Result, Error, ErrorKind, ResultExt};
 use ::proto::{MqttPacket, QualityOfService};
-use ::types::{SubItem, BoxMqttStream};
+use ::types::{SubscriptionStream, BoxMqttStream, SubItem};
 use ::persistence::Persistence;
+
+type BoxFuture<T, E> = Box<Future<Item = T,Error = E>>;
 
 type MqttFramedReader<I> = SplitStream<Framed<I, MqttCodec>>;
 type MqttFramedWriter<I> = SplitSink<Framed<I, MqttCodec>>;
-type SubscriptionSender = UnboundedSender<SubscriptionResult>;
-type SubscriptionResult = Result<SubItem>;
+type SubscriptionSender = UnboundedSender<SubItem>;
 type ClientQueue = Peekable<UnboundedReceiver<ClientRequest>>;
-
-pub enum TimeoutType {
-    Ping(usize),
-    Disconnect
-}
 
 pub enum ClientReturn {
     Onetime(Option<MqttPacket>),
-    Ongoing(Vec<Result<(BoxMqttStream<Result<SubItem>>, QualityOfService)>>)
+    Ongoing(Vec<Result<(SubscriptionStream, QualityOfService)>>)
 }
 
 pub struct ClientRequest {
@@ -54,8 +51,15 @@ impl ClientRequest {
 }
 
 pub enum ClientRequestType {
+    Connect(MqttPacket, u64),
     Normal(MqttPacket),
     Disconnect(Option<u64>)
+}
+
+pub enum TimeoutType {
+    Connect,
+    Ping(usize),
+    Disconnect
 }
 
 /// These types act like tagged future items/errors, allowing the loop to know which future has
@@ -65,7 +69,8 @@ pub enum SourceItem<I> {
     ProcessResponse(bool),
     GotRequest(ClientQueue, Option<ClientRequest>),
     ProcessRequest(bool),
-    Timeout(TimeoutType)
+    Timeout(TimeoutType),
+    GotPingResponse
 }
 
 pub enum SourceError<I> {
@@ -73,7 +78,8 @@ pub enum SourceError<I> {
     ProcessResponse(Error),
     GotRequest(ClientQueue, Error),
     ProcessRequest(Error),
-    Timeout(Error)
+    Timeout(Error),
+    GotPingResponse
 }
 
 impl<I> From<SourceError<I>> for Error {
@@ -83,7 +89,8 @@ impl<I> From<SourceError<I>> for Error {
             SourceError::ProcessResponse(e) => e,
             SourceError::GotRequest(_, e) => e,
             SourceError::ProcessRequest(e) => e,
-            SourceError::Timeout(e) => e
+            SourceError::Timeout(e) => e,
+            SourceError::GotPingResponse => unreachable!()
         }
     }
 }

@@ -34,6 +34,10 @@ error_chain! {
             description("Loop unexpectedly aborted")
         }
 
+        LoopStateError {
+            description("Loop encountered illegal state")
+        }
+
         LoopError {
             description("An error occurred while processing another request")
         }

@@ -1,5 +1,5 @@
 use ::bytes::Bytes;
-use ::errors::Error;
+use ::errors::{Result, Error};
 use ::futures::future::BoxFuture;
 use ::futures::sink::BoxSink;
 use ::futures::stream::BoxStream;
@@ -9,3 +9,4 @@ pub type BoxMqttSink<T> = BoxSink<T, Error>;
 pub type BoxMqttStream<T> = BoxStream<T, Error>;
 
 pub type SubItem = (String, Bytes);
+pub type SubscriptionStream = BoxMqttStream<SubItem>;

@@ -24,14 +24,15 @@ enum State {
     Writing
 }
 
-pub struct RequestProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'static,
-    P: Persistence {
+pub struct RequestProcessor<'p, I, P>
+    where I: AsyncRead + AsyncWrite + 'static, P: 'p + Persistence, 'p: 'static {
     state: Take<State>,
-    data: FutMutex<LoopData<I, P>>
+    data: FutMutex<LoopData<'p, I, P>>
 }
 
-impl<I, P> RequestProcessor<I, P> where I: AsyncRead + AsyncWrite + Send, P: Persistence {
-    pub fn new(req: (MqttPacket, Sender<Result<ClientReturn>>), data: FutMutex<LoopData<I, P>>) -> RequestProcessor<I, P> {
+impl<'p, I, P> RequestProcessor<'p, I, P>
+    where I: AsyncRead + AsyncWrite, P: 'p + Persistence, 'p: 'static {
+    pub fn new(req: (MqttPacket, Sender<Result<ClientReturn>>), data: FutMutex<LoopData<'p, I, P>>) -> RequestProcessor<'p, I, P> {
         RequestProcessor {
             state: Take::new(State::Sending(req)),
             data: data
@@ -39,7 +40,8 @@ impl<I, P> RequestProcessor<I, P> where I: AsyncRead + AsyncWrite + Send, P: Per
     }
 }
 
-impl<I, P> Future for RequestProcessor<I, P> where I: AsyncRead + AsyncWrite + Send, P: Persistence {
+impl<'p, I, P> Future for RequestProcessor<'p, I, P>
+    where I: AsyncRead + AsyncWrite, P: 'p + Persistence, 'p: 'static {
     type Item = SourceItem<I>;
     type Error = SourceError<I>;
 

@@ -1,16 +1,21 @@
 use std::default::Default;
+use std::cell::{RefCell, RefMut, BorrowMutError};
+use std::rc::Rc;
+use std::marker::PhantomData;
+
 use ::tokio_core::reactor::Handle;
 use ::tokio_io::{AsyncRead, AsyncWrite};
 use ::futures::Future;
 use ::futures::stream::Stream;
 use ::bytes::{Bytes};
 use ::proto::*;
-use ::types::*;
+use ::types::{BoxMqttStream, BoxMqttFuture, SubscriptionStream as SubStream};
 use ::tokio::{Loop, LoopClient, ClientReturn};
-use ::errors::{Result as MqttResult, ErrorKind, ResultExt};
+use ::errors::{Result as MqttResult, Error, ErrorKind, ResultExt};
 use ::persistence::Persistence;
 
 pub struct ClientConfig {
+    pub connect_timeout: u64,
     pub keep_alive: u16,
     pub version: ProtoLvl,
     pub lwt: Option<(String, QualityOfService, bool, Bytes)>,
@@ -22,6 +27,7 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> ClientConfig {
         ClientConfig {
+            connect_timeout: 30,
             keep_alive: 0,
             version: ProtoLvl::V3_1_1,
             lwt: None,
@@ -34,6 +40,7 @@ impl Default for ClientConfig {
 
 impl ClientConfig {
     /// Returns a client configuration with some defaults set.
+    ///  - Connect Timeout: 30 seconds
     ///  - Keep Alive: 0 (off)
     ///  - Version: MQTT 3.1.1
     ///  - Last Will and Testament: None
@@ -41,6 +48,13 @@ impl ClientConfig {
     ///  - Client ID: empty
     pub fn new() -> ClientConfig {
         ClientConfig::default()
+    }
+
+    /// Specify how long the client should wait for the server to acknowledge a connection request.
+    /// 0 means wait indefinetely.
+    pub fn connect_timeout(&mut self, t: u64) -> &mut ClientConfig {
+        self.connect_timeout = t;
+        self
     }
 
     /// Sets the keep alive value of the connection. If no response is recieved in `k * 1.5`
@@ -90,99 +104,114 @@ impl ClientConfig {
     }
 }
 
-pub struct Client {
-    connected: bool,
-    handle: Handle,
-    client: LoopClient
+enum ClientState {
+    Connected(LoopClient),
+    Disconnected
 }
 
-impl Client {
+pub struct Client<P> where P: Persistence {
+    state: ClientState,
+    handle: Handle,
+    persistence: Rc<RefCell<P>>
+}
+
+impl<P> Client<P> where P: Persistence {
     /// Return an empty configuration object. See `ClientConfig` for instructions on how to use.
     pub fn config() -> ClientConfig {
         ClientConfig::new()
     }
+    /// Create a new client with the given configuration.
+    ///
+    /// `p` is an object that implements `Persistence` that holds in-flight packets for QoS1 and
+    /// QoS2 publishing. You provide this object so that in the event of an unexpected disconnect,
+    /// the client can retrieve packets and resend them. This API requests a `Rc<RefCell<P>>`,
+    /// which the client will mutably borrow when it connects. This ensures that the persistence
+    /// object contines to live after a disconnect, expected or otherwise. You won't be allowed to
+    /// mutate the persistence object once you connect.
+    ///
+    /// `config` provides options to configure the client.
+    ///
+    /// `handle` is a `tokio-core::reactor::Handle`.
+    pub fn new(p: Rc<RefCell<P>>, hdl: Handle) -> MqttResult<Client<P>>
+        where P: Persistence {
+        Ok(Client {
+            state: ClientState::Disconnected,
+            handle: hdl,
+            persistence: p
+        })
+    }
+
+    /// Starts an MQTT session with the provided configuration.
     /// `io` should be some network socket that provides an ordered, lossless stream of bytes.
     /// TCP, TLS and Websockets are all supported standards, however you may choose any protocol
     /// that fits the above criteria. The client will try to be well-behaved without this
     /// guarantee, but can not guarantee QoS compliance or good service.
     ///
-    /// `state` is an object that implements `Persistence` that holds in-flight packets for QoS1
-    /// and QoS2 publishing. You provide this object so that in the event of an unexpected
-    /// disconnect, the client can retrieve packets and resend them.
-    ///
-    /// `config` provides options to configure the client.
-    ///
-    /// `handle` is a `tokio-core::reactor::Handle`.
-    ///
-    /// Note that the client takes an owned io type, so that it may follow protocol conformance and
+    /// Note that the client takes an owned type, so that it may follow protocol conformance and
     /// disconnect the network connection when needed.
     /// **Please don't give this method a clone of a connection**. The client is expected to own a
-    /// unique value that it can manipulate at will without disrupting other processes going on in
-    /// the running program.
-    pub fn new<I, P>(io: I, state: P, handle: Handle, config: &ClientConfig) -> MqttResult<Client>
-        where I: AsyncRead + AsyncWrite + 'static + Send, P: Persistence + Send + 'static {
-        // Setup a continual loop. This loop handles all the nitty gritty of reciving and
-        // dispatching packets from the server. It essentially multiplexes packets to the correct // destination. Designed to run constantly on a Core loop, unless an error occurs.
-        let (lp, client) = Loop::new(io, state, handle.clone(), config.keep_alive as u64)?;
-        handle.spawn(lp);
-        Ok(Client {
-            connected: false,
-            handle: handle,
-            client: client
-        })
-    }
-
-    /// Starts an MQTT session with the provided configuration.
+    /// unique value that it can manipulate at will without disrupting other references to the
+    /// underlying socket.
     ///
     /// If the server has a previous session with this client, and Clean Session has been set to
     /// false, the returned stream will contain all the messages that this client missed, based on
     /// its previous subscriptions.
     ///
     /// `config` provides options to configure the client.
-    pub fn connect(&mut self, config: &ClientConfig) -> MqttResult<Option<BoxMqttStream<MqttResult<SubItem>>>> {
-        if self.connected {
-            bail!(ErrorKind::AlreadyConnected)
-        }
+    pub fn connect<'p, I>(&'p mut self, io: I, cfg: &ClientConfig) -> MqttResult<Option<SubStream>>
+    where I: AsyncRead + AsyncWrite + 'static, P: Persistence {
+        // Setup a continual loop. This loop handles all the nitty gritty of reciving and
+        // dispatching packets from the server. It essentially multiplexes packets to the correct
+        // destination. Designed to run constantly on a Core loop, unless an error occurs.
+        if let ClientState::Connected(_) = self.state {
+            bail!(ErrorKind::AlreadyConnected);
+        } else {
+            let persist = self.persistence.try_borrow_mut().map_err(|_| {
+                Error::from(ErrorKind::PersistenceError)
+            })?;
+            let (lp, mut client) = Loop::new(io, persist, self.handle.clone(), cfg.keep_alive as u64,
+                cfg.connect_timeout)?;
 
-        // Prepare a connect packet to send using the provided values
-        let lwt = if let Some((ref t, ref q, ref r, ref m)) = config.lwt {
-            let topic = MqttString::from_str(&t)?;
-            Some(LWTMessage::new(topic, q.clone(), *r, m.clone()))
-        } else {
-            None
-        };
-        let client_id = if let Some(ref cid) = config.client_id {
-            Some(MqttString::from_str(&cid)?)
-        } else {
-            None
-        };
-        let cred = if let Some((ref user, ref p)) = config.creds {
-            let pwd = if let &Some(ref pass) = p {
-                Some(MqttString::from_str(pass)?)
+            // Prepare a connect packet to send using the provided values
+            let lwt = if let Some((ref t, ref q, ref r, ref m)) = cfg.lwt {
+                let topic = MqttString::from_str(&t)?;
+                Some(LWTMessage::new(topic, q.clone(), *r, m.clone()))
             } else {
                 None
             };
-            Some((MqttString::from_str(&user)?, pwd))
-        } else {
-            None
-        };
-        let connect = MqttPacket::connect_packet(config.version, lwt, cred, config.clean,
-            config.keep_alive, client_id);
-        // Send packet
-        let res_fut = self.client.request(connect)?;
-        // Wait for acknowledgement
-        let res = res_fut.wait().chain_err(|| ErrorKind::LoopAbortError)?;
+            let client_id = if let Some(ref cid) = cfg.client_id {
+                Some(MqttString::from_str(&cid)?)
+            } else {
+                None
+            };
+            let cred = if let Some((ref user, ref p)) = cfg.creds {
+                let pwd = if let &Some(ref pass) = p {
+                    Some(MqttString::from_str(pass)?)
+                } else {
+                    None
+                };
+                Some((MqttString::from_str(&user)?, pwd))
+            } else {
+                None
+            };
+            let connect = MqttPacket::connect_packet(cfg.version, lwt, cred, cfg.clean,
+                cfg.keep_alive, client_id);
+            // Send packet
+            let res_fut = client.request(connect)?;
+            // Wait for acknowledgement
+            let res = res_fut.wait().chain_err(|| ErrorKind::LoopAbortError)?;
 
-        self.connected = true;
+            self.state = ClientState::Connected(client);
 
-        match res? {
-            ClientReturn::Onetime(_) => Ok(None),
-            ClientReturn::Ongoing(mut subs) => {
-                match subs.pop() {
-                    Some(Ok((s, _))) =>  Ok(Some(s.boxed())),
-                    _ => unreachable!()
-                }
-            },
+            match res? {
+                ClientReturn::Onetime(_) => Ok(None),
+                ClientReturn::Ongoing(mut subs) => {
+                    match subs.pop() {
+                        Some(Ok((s, _))) =>  Ok(Some(s.boxed())),
+                        _ => unreachable!()
+                    }
+                },
+            }
         }
     }
 
@@ -209,7 +238,7 @@ impl Client {
     /// of messages that match the provided filter; the string provided will contain the topic
     /// string the subscription matched on. The stream will stop when `unsubscribe` is called with
     /// the matching topic filter or when the client disconnects.
-    pub fn subscribe(&mut self, topic: String, qos: QualityOfService) -> BoxMqttFuture<BoxMqttStream<SubItem>> {
+    pub fn subscribe(&mut self, topic: String, qos: QualityOfService) -> BoxMqttFuture<SubStream> {
         unimplemented!()
     }
 
@@ -217,7 +246,7 @@ impl Client {
     /// resolve to `Stream`'s of messages matching the corresponding topic filters. The streams
     /// will stop when `unsubscribe` is called with the matching topic filter or the client
     /// disconnects.
-    pub fn subscribe_many(&mut self, subscriptions: Vec<(String, QualityOfService)>) ->  Vec<BoxMqttFuture<BoxMqttStream<SubItem>>>{
+    pub fn subscribe_many(&mut self, subscriptions: Vec<(String, QualityOfService)>) ->  Vec<BoxMqttFuture<SubStream>>{
         unimplemented!()
     }
 

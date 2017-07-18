@@ -29,7 +29,6 @@ use ::types::SubItem;
 use super::MqttFramedReader;
 use super::mqtt_loop::LoopData;
 use super::{
-    SubscriptionResult,
     SourceItem,
     SourceError,
     ClientReturn,
@@ -45,21 +44,22 @@ enum State {
 }
 
 /// This type will take a packet from the server and process it, returning the stream it came from
-pub struct ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'static, P: Persistence {
+pub struct ResponseProcessor<'p, I, P>
+    where I: AsyncRead + AsyncWrite + 'static, P: 'p + Persistence, 'p: 'static {
     state: Take<State>,
-    data: FutMutex<LoopData<I, P>>
+    data: FutMutex<LoopData<'p, I, P>>
 }
 
-impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'static,
-    P: Persistence {
-    pub fn new(packet: MqttPacket, data: FutMutex<LoopData<I, P>>) -> ResponseProcessor<I, P> {
+impl<'p, I, P> ResponseProcessor<'p, I, P>
+    where I: AsyncRead + AsyncWrite + 'static, P: 'p + Persistence, 'p: 'static {
+    pub fn new(packet: MqttPacket, data: FutMutex<LoopData<'p, I, P>>) -> ResponseProcessor<'p, I, P> {
         ResponseProcessor {
             state: Take::new(State::Processing(packet)),
             data: data,
         }
     }
 
-    fn process_conn_ack(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
+    fn process_conn_ack(mut data: FutMutexGuard<LoopData<'p, I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         // Check if we are awaiting a CONNACK
         let (_, client) = match data.one_time.entry(OneTimeKey::Connect) {
             Entry::Vacant(v) => {
@@ -77,7 +77,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
             if sess.is_clean() {
                 let _ = client.send(Ok(ClientReturn::Onetime(Some(packet))));
             } else {
-                let (tx, rx) = unbounded::<SubscriptionResult>();
+                let (tx, rx) = unbounded::<SubItem>();
                 let custom_rx = rx.map_err(|_| {
                     Error::from(ErrorKind::LoopCommsError)
                 });
@@ -94,7 +94,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         }
     }
 
-    fn process_sub_ack(mut data: FutMutexGuard<LoopData<I,P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
+    fn process_sub_ack(mut data: FutMutexGuard<LoopData<'p, I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let packet_id = packet.headers.get::<PacketId>().unwrap();
         let (o, c) = match data.one_time.entry(OneTimeKey::Subscribe(*packet_id)) {
             Entry::Vacant(v) => {
@@ -115,7 +115,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         let mut collect = Vec::new();
         for (sub, ret) in orig.iter().zip(ret_codes.iter()) {
             if ret.is_ok() {
-                let (tx, rx) = unbounded::<SubscriptionResult>();
+                let (tx, rx) = unbounded::<SubItem>();
                 let custom_rx = rx.map_err(|_| {
                     Error::from(ErrorKind::LoopCommsError)
                 });
@@ -136,7 +136,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         Ok(None)
     }
 
-    fn process_unsub_ack(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
+    fn process_unsub_ack(mut data: FutMutexGuard<LoopData<'p, I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let pid = packet.headers.get::<PacketId>().unwrap();
         let (o, c) = match data.one_time.entry(OneTimeKey::Unsubscribe(*pid)) {
             Entry::Vacant(v) => {
@@ -157,7 +157,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         Ok(None)
     }
 
-    fn process_ping_resp(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
+    fn process_ping_resp(mut data: FutMutexGuard<LoopData<'p, I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         if let Entry::Occupied(o) = data.one_time.entry(
             OneTimeKey::PingReq) {
             let (_, client) = o.remove();
@@ -166,7 +166,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         Ok(None)
     }
 
-    fn process_pub(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
+    fn process_pub(mut data: FutMutexGuard<LoopData<'p, I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         // Scream for the publish
         match packet.flags.qos() {
             QualityOfService::QoS0 => {
@@ -177,7 +177,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
                 };
                 for &(ref filter, ref sender) in data.subscriptions.values() {
                     if filter.match_topic(&topic) {
-                        let _ = sender.send(Ok((topic.clone().into(), payload.clone())));
+                        let _ = sender.send((topic.clone().into(), payload.clone()));
                     }
                 }
                 Ok(None)
@@ -192,7 +192,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
                 };
                 for &(ref filter, ref sender) in data.subscriptions.values() {
                     if filter.match_topic(&topic) {
-                        let _ = sender.send(Ok((topic.clone().into(), payload.clone())));
+                        let _ = sender.send((topic.clone().into(), payload.clone()));
                     }
                 }
 
@@ -217,7 +217,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         }
     }
 
-    fn process_pub_ack(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
+    fn process_pub_ack(mut data: FutMutexGuard<LoopData<'p, I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let id = packet.headers.get::<PacketId>().unwrap();
         if data.client_publish_state.contains_key(&id) {
             let (p_key, sender) = match data.client_publish_state.remove(&id) {
@@ -245,7 +245,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         }
     }
 
-    fn process_pub_rec(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
+    fn process_pub_rec(mut data: FutMutexGuard<LoopData<'p, I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let id = packet.headers.get::<PacketId>().unwrap();
         if data.client_publish_state.contains_key(&id) {
             let (p_key, sender) = match data.client_publish_state.remove(&id) {
@@ -277,7 +277,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         }
     }
 
-    fn process_pub_rel(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
+    fn process_pub_rel(mut data: FutMutexGuard<LoopData<'p, I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let id = packet.headers.get::<PacketId>().unwrap();
         if data.server_publish_state.contains_key(&id) {
             let orig = match data.server_publish_state.remove(&id) {
@@ -292,7 +292,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
             };
             for &(ref filter, ref sender) in data.subscriptions.values() {
                 if filter.match_topic(&topic) {
-                    let _ = sender.send(Ok((topic.clone().into(), payload.clone())));
+                    let _ = sender.send((topic.clone().into(), payload.clone()));
                 }
             }
 
@@ -303,7 +303,7 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
         }
     }
 
-    fn process_pub_comp(mut data: FutMutexGuard<LoopData<I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
+    fn process_pub_comp(mut data: FutMutexGuard<LoopData<'p, I, P>>, packet: MqttPacket) -> result::Result<Option<MqttPacket>, SourceError<I>> {
         let id = packet.headers.get::<PacketId>().unwrap();
         if data.client_publish_state.contains_key(&id) {
             let (p_key, sender) = match data.client_publish_state.remove(&id) {
@@ -332,8 +332,8 @@ impl<I, P> ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'sta
     }
 }
 
-impl<I, P> Future for ResponseProcessor<I, P> where I: AsyncRead + AsyncWrite + Send + 'static,
-    P: Persistence {
+impl<'p, I, P> Future for ResponseProcessor<'p, I, P>
+    where I: AsyncRead + AsyncWrite + 'static, P: 'p + Persistence, 'p: 'static {
     type Item = SourceItem<I>;
     type Error = SourceError<I>;
 
