@@ -4,7 +4,6 @@ use std::result;
 
 use ::tokio_io::{AsyncRead, AsyncWrite};
 use ::futures::{Poll, Async, AsyncSink, Sink, Stream, Future};
-use ::futures::stream::StreamFuture;
 use ::futures::sync::mpsc::{unbounded};
 use ::bytes::Bytes;
 use ::take::Take;
@@ -15,7 +14,6 @@ use ::persistence::Persistence;
 use ::proto::{
     MqttPacket,
     PacketType,
-    Headers,
     QualityOfService,
     Payload,
     ConnectReturnCode,
@@ -23,10 +21,9 @@ use ::proto::{
     PacketId,
     TopicName
 };
-use ::errors::{Result, Error, ErrorKind, ResultExt};
+use ::errors::{Error, ErrorKind, ResultExt};
 use ::errors::proto::{ErrorKind as ProtoErrorKind};
 use ::types::SubItem;
-use super::MqttFramedReader;
 use super::mqtt_loop::LoopData;
 use super::{
     SourceItem,
@@ -384,7 +381,9 @@ impl<'p, I, P> Future for ResponseProcessor<'p, I, P>
                 if let Some(s) = state {
                     self.state = Take::new(State::Sending(s));
                 } else {
-                    return Ok(Async::Ready(SourceItem::ProcessResponse(false)));
+                    let work = !(data.server_publish_state.is_empty() &&
+                        data.client_publish_state.is_empty());
+                    return Ok(Async::Ready(SourceItem::ProcessResponse(false, work)));
                 }
             },
             State::Sending(packet) => {
@@ -411,6 +410,8 @@ impl<'p, I, P> Future for ResponseProcessor<'p, I, P>
                 };
                 try_ready!(data.framed_write.poll_complete()
                     .map_err(|e| SourceError::ProcessResponse(e)));
+                let work = !(data.server_publish_state.is_empty() &&
+                    data.client_publish_state.is_empty());
                 return Ok(Async::Ready(SourceItem::ProcessResponse(true)));
             }
         };}

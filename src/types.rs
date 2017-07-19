@@ -1,5 +1,5 @@
 use ::bytes::Bytes;
-use ::errors::{Result, Error};
+use ::errors::Error;
 use ::futures::future::BoxFuture;
 use ::futures::sink::BoxSink;
 use ::futures::stream::BoxStream;

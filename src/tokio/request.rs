@@ -6,7 +6,7 @@ use ::futures_mutex::FutMutex;
 use ::bincode;
 
 use ::persistence::Persistence;
-use ::proto::{MqttPacket, PacketType, Headers, QualityOfService, PacketId};
+use ::proto::{MqttPacket, PacketType, QualityOfService, PacketId};
 use ::errors::{Error, Result, ErrorKind, ResultExt};
 use super::mqtt_loop::LoopData;
 use super::{
@@ -14,7 +14,6 @@ use super::{
     SourceError,
     OneTimeKey,
     PublishState,
-    ClientQueue,
     ClientReturn
 };
 
@@ -55,6 +54,8 @@ impl<'p, I, P> Future for RequestProcessor<'p, I, P>
                         return Ok(Async::NotReady)
                     }
                 };
+                let work = !(data.server_publish_state.is_empty() &&
+                    data.client_publish_state.is_empty());
                 let c = packet.clone();
                 self.state = Take::new(match data.framed_write.start_send(c) {
                     Ok(AsyncSink::Ready) => State::Processing((packet, client)),
@@ -63,7 +64,7 @@ impl<'p, I, P> Future for RequestProcessor<'p, I, P>
                         match e {
                             Error(ErrorKind::PacketEncodingError, _) => {
                                 let _ = client.send(Err(e));
-                                return Ok(Async::Ready(SourceItem::ProcessRequest(false)));
+                                return Ok(Async::Ready(SourceItem::ProcessRequest(false, work)));
                             },
                             _ => return Err(SourceError::ProcessRequest(e))
                         }
@@ -130,7 +131,9 @@ impl<'p, I, P> Future for RequestProcessor<'p, I, P>
                 };
                 try_ready!(data.framed_write.poll_complete()
                     .map_err(|e| SourceError::ProcessRequest(e)));
-                return Ok(Async::Ready(SourceItem::ProcessRequest(true)));
+                let work = !(data.server_publish_state.is_empty() &&
+                    data.client_publish_state.is_empty());
+                return Ok(Async::Ready(SourceItem::ProcessRequest(true, work)));
             }
         };}
     }

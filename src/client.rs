@@ -1,7 +1,4 @@
 use std::default::Default;
-use std::cell::{RefCell, RefMut, BorrowMutError};
-use std::rc::Rc;
-use std::marker::PhantomData;
 
 use ::tokio_core::reactor::Handle;
 use ::tokio_io::{AsyncRead, AsyncWrite};
@@ -9,9 +6,9 @@ use ::futures::Future;
 use ::futures::stream::Stream;
 use ::bytes::{Bytes};
 use ::proto::*;
-use ::types::{BoxMqttStream, BoxMqttFuture, SubscriptionStream as SubStream};
+use ::types::{BoxMqttFuture, SubscriptionStream as SubStream};
 use ::tokio::{Loop, LoopClient, ClientReturn};
-use ::errors::{Result as MqttResult, Error, ErrorKind, ResultExt};
+use ::errors::{Result as MqttResult, ErrorKind, ResultExt};
 use ::persistence::Persistence;
 
 pub struct ClientConfig {
@@ -112,7 +109,7 @@ enum ClientState {
 pub struct Client<P> where P: Persistence {
     state: ClientState,
     handle: Handle,
-    persistence: Rc<RefCell<P>>
+    persistence: P
 }
 
 impl<P> Client<P> where P: Persistence {
@@ -123,16 +120,12 @@ impl<P> Client<P> where P: Persistence {
     /// Create a new client with the given configuration.
     ///
     /// `p` is an object that implements `Persistence` that holds in-flight packets for QoS1 and
-    /// QoS2 publishing. You provide this object so that in the event of an unexpected disconnect,
-    /// the client can retrieve packets and resend them. This API requests a `Rc<RefCell<P>>`,
-    /// which the client will mutably borrow when it connects. This ensures that the persistence
-    /// object contines to live after a disconnect, expected or otherwise. You won't be allowed to
-    /// mutate the persistence object once you connect.
+    /// QoS2 publishing; this enables the client to maintain session across connections.
     ///
     /// `config` provides options to configure the client.
     ///
     /// `handle` is a `tokio-core::reactor::Handle`.
-    pub fn new(p: Rc<RefCell<P>>, hdl: Handle) -> MqttResult<Client<P>>
+    pub fn new(p: P, hdl: Handle) -> MqttResult<Client<P>>
         where P: Persistence {
         Ok(Client {
             state: ClientState::Disconnected,
@@ -166,11 +159,8 @@ impl<P> Client<P> where P: Persistence {
         if let ClientState::Connected(_) = self.state {
             bail!(ErrorKind::AlreadyConnected);
         } else {
-            let persist = self.persistence.try_borrow_mut().map_err(|_| {
-                Error::from(ErrorKind::PersistenceError)
-            })?;
-            let (lp, mut client) = Loop::new(io, persist, self.handle.clone(), cfg.keep_alive as u64,
-                cfg.connect_timeout)?;
+            let (lp, mut client) = Loop::new(io, &mut self.persistence, self.handle.clone(),
+                cfg.keep_alive as u64, cfg.connect_timeout)?;
 
             // Prepare a connect packet to send using the provided values
             let lwt = if let Some((ref t, ref q, ref r, ref m)) = cfg.lwt {

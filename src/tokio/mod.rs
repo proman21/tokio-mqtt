@@ -6,10 +6,6 @@ mod request;
 pub use self::mqtt_loop::{Loop, LoopClient};
 pub use self::codec::MqttCodec;
 
-use std::ops::Deref;
-use std::sync::Arc;
-use std::result;
-
 use ::tokio_io::codec::Framed;
 use ::futures::Future;
 use ::futures::stream::{SplitStream, SplitSink, Peekable};
@@ -19,7 +15,7 @@ use ::regex::{escape, Regex};
 
 use ::errors::{Result, Error, ErrorKind, ResultExt};
 use ::proto::{MqttPacket, QualityOfService};
-use ::types::{SubscriptionStream, BoxMqttStream, SubItem};
+use ::types::{SubscriptionStream, SubItem};
 use ::persistence::Persistence;
 
 type BoxFuture<T, E> = Box<Future<Item = T,Error = E>>;
@@ -66,9 +62,9 @@ pub enum TimeoutType {
 /// returned. This simplifies the process of handling sources.
 pub enum SourceItem<I> {
     GotResponse(MqttFramedReader<I>, Option<MqttPacket>),
-    ProcessResponse(bool),
+    ProcessResponse(bool, bool),
     GotRequest(ClientQueue, Option<ClientRequest>),
-    ProcessRequest(bool),
+    ProcessRequest(bool, bool),
     Timeout(TimeoutType),
     GotPingResponse
 }

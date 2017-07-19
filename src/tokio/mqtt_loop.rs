@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
-use std::cell::RefMut;
+use std::mem;
 
 use ::futures::{Poll, Async};
 use ::futures::future::{Future};
@@ -136,7 +136,7 @@ pub struct LoopData<'p, I, P> where I: AsyncRead + AsyncWrite + 'static,
     pub subscriptions: HashMap<String, (TopicFilter, SubscriptionSender)>,
     // Shared mutable Persistence cache
     // TODO: Avoid runtime borrow checking
-    pub persistence: RefMut<'p, P>
+    pub persistence: &'p mut P
 }
 
 /// ## Internal loop for the MQTT client.
@@ -230,13 +230,15 @@ pub struct Loop<'p, I, P>
     sources: FuturesUnordered<BoxFuture<SourceItem<I>, SourceError<I>>>,
     // Status of the loop
     status: LoopStatus<Error>,
+    // Tells us whether there are still in-flight QoS1/2 packets
+    inflight: bool,
     // Holds the ID of the current timer
     timer_flag: Option<usize>
 }
 
 impl<'p, I, P> Loop<'p, I, P> where I: AsyncRead + AsyncWrite + 'static,
     P: 'p + Persistence {
-    pub fn new(io: I, persist: RefMut<'p, P>, handle: Handle, keep_alive: u64, connect_timeout: u64) -> Result<(Loop<'p, I, P>, LoopClient)> {
+    pub fn new(io: I, persist: &'p mut P, handle: Handle, keep_alive: u64, connect_timeout: u64) -> Result<(Loop<'p, I, P>, LoopClient)> {
         let (tx, rx) = unbounded::<ClientRequest>();
         let (fwrite, fread) = io.framed(MqttCodec).split();
         let client = LoopClient::new(tx.clone());
@@ -259,7 +261,8 @@ impl<'p, I, P> Loop<'p, I, P> where I: AsyncRead + AsyncWrite + 'static,
             status: LoopStatus::Disconnected,
             data: loop_data,
             sources: sources,
-            timer_flag: Some(0)
+            inflight: false,
+            timer_flag: None
         };
         Ok((lp, client))
     }
@@ -295,6 +298,10 @@ impl<'p, I, P> Future for Loop<'p, I, P> where I: AsyncRead + AsyncWrite + 'stat
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
+            if let LoopStatus::Done = self.status {
+                return Ok(Async::Ready(()))
+            }
+
             let res = match self.sources.poll() {
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Ok(Async::Ready(r)) => r,
@@ -367,7 +374,11 @@ impl<'p, I, P> Future for Loop<'p, I, P> where I: AsyncRead + AsyncWrite + 'stat
                                 }
                             }
                         },
-                        LoopStatus::PendingError(e) => {
+                        LoopStatus::PendingError(_) => {
+                            let e = match mem::replace(current_state, LoopStatus::Done) {
+                                LoopStatus::PendingError(e) => e,
+                                _ => unreachable!()
+                            };
                             if let Some(req) = request {
                                 let _ = req.inital_ret.send(Err(e));
                             }
@@ -376,7 +387,8 @@ impl<'p, I, P> Future for Loop<'p, I, P> where I: AsyncRead + AsyncWrite + 'stat
                         _ => unreachable!()
                     };
                 },
-                Some(SourceItem::ProcessRequest(sent)) => {
+                Some(SourceItem::ProcessRequest(sent, more)) => {
+                    self.inflight = more;
                     // Set the timeout flag
                     let id = self.timer_flag.take().map(|t| t + 1).unwrap_or(0);
                     self.timer_flag = Some(id);
@@ -404,10 +416,11 @@ impl<'p, I, P> Future for Loop<'p, I, P> where I: AsyncRead + AsyncWrite + 'stat
                         _ => unreachable!()
                     }
                 },
-                Some(SourceItem::ProcessResponse(sent)) => {
-                    let mut current_state = &mut self.status;
+                Some(SourceItem::ProcessResponse(sent, work)) => {
+                    let current_state = &mut self.status;
                     match current_state {
-                        &mut LoopStatus::Connected | &mut LoopStatus::Disconnecting(_, _) => {
+                        &mut LoopStatus::Connected => {
+                            self.inflight = work;
                             if sent {
                                 self.timer_flag = None;
                             } else {
@@ -423,6 +436,28 @@ impl<'p, I, P> Future for Loop<'p, I, P> where I: AsyncRead + AsyncWrite + 'stat
                                 }
                             }
                         },
+                        &mut LoopStatus::Disconnecting(ref mut state, ret) => {
+                            // Have we finished our work?
+                            match state
+                            if work {
+                                if sent {
+                                    self.timer_flag = None;
+                                } else {
+                                    // Set the timeout flag
+                                    let id = self.timer_flag.take().map(|t| t + 1).unwrap_or(0);
+                                    self.timer_flag = Some(id);
+                                    // Make the timeout
+                                    let timeout = Timeout::new(Duration::from_secs(self.keep_alive),
+                                        &self.handle).ok();
+                                    if let Some(timer) = timeout {
+                                        let timeout_fut = Loop::<I,P>::make_timeout(timer, TimeoutType::Ping(id));
+                                        self.sources.push(timeout_fut);
+                                    }
+                                }
+                            } else {
+                                *state = DisconnectState::Sending;
+                            }
+                        },
                         _ => unreachable!()
                     }
                 },
@@ -430,15 +465,15 @@ impl<'p, I, P> Future for Loop<'p, I, P> where I: AsyncRead + AsyncWrite + 'stat
                     match t {
                         TimeoutType::Connect => {
                             let mut current_state = &mut self.status;
-                            match current_state {
-                                &mut LoopStatus::Connecting(_) => {
+                            match *current_state {
+                                LoopStatus::Connecting(_) => {
                                     *current_state = LoopStatus::PendingError(
                                         ProtoErrorKind::ResponseTimeout(
                                             PacketType::Connect
                                         ).into()
                                     );
                                 },
-                                _ => unimplemented!()
+                                _ => {}
                             }
                         }
                         TimeoutType::Ping(id) => {
@@ -492,7 +527,9 @@ enum LoopStatus<E> {
     // Loop is in the process of disconnecting
     Disconnecting(DisconnectState, Sender<Result<ClientReturn>>),
     // Loop has an error that has not been reported to the client
-    PendingError(E)
+    PendingError(E),
+    // Loop is done.
+    Done
 }
 
 enum DisconnectState {
