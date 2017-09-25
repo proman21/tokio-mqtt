@@ -1,7 +1,10 @@
 mod codec;
 mod mqtt_loop;
+mod connect;
 mod response;
 mod request;
+mod outbound_handlers;
+mod inbound_handlers;
 
 pub use self::mqtt_loop::{Loop, LoopClient};
 pub use self::codec::MqttCodec;
@@ -20,6 +23,7 @@ use ::persistence::Persistence;
 
 type BoxFuture<T, E> = Box<Future<Item = T,Error = E>>;
 
+type RequestTuple = (MqttPacket, Sender<Result<ClientReturn>>);
 type MqttFramedReader<I> = SplitStream<Framed<I, MqttCodec>>;
 type MqttFramedWriter<I> = SplitSink<Framed<I, MqttCodec>>;
 type SubscriptionSender = UnboundedSender<SubItem>;
@@ -31,19 +35,24 @@ pub enum ClientReturn {
 }
 
 pub struct ClientRequest {
-    pub inital_ret: Sender<Result<()>>,
-    pub return_chan: Sender<Result<ClientReturn>>,
+    pub ack: Sender<Result<()>>,
+    pub ret: Sender<Result<ClientReturn>>,
     pub ty: ClientRequestType
 }
 
 impl ClientRequest {
-    pub fn new(initial: Sender<Result<()>>, ret: Sender<Result<ClientReturn>>, ty: ClientRequestType) -> ClientRequest {
+    pub fn new(ack: Sender<Result<()>>, ret: Sender<Result<ClientReturn>>, ty: ClientRequestType) -> ClientRequest {
         ClientRequest {
-            inital_ret: initial,
-            return_chan: ret,
-            ty: ty
+            ack,
+            ret,
+            ty
         }
     }
+}
+
+pub enum LoopRequest {
+    Internal(MqttPacket),
+    External(MqttPacket, Sender<Result<ClientReturn>>)
 }
 
 pub enum ClientRequestType {

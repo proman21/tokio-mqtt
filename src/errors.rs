@@ -60,17 +60,6 @@ error_chain! {
     }
 }
 
-impl Error {
-    pub fn is_transient(&self) -> bool {
-        match *self {
-            Error(ErrorKind::StringConversionError, _) |
-            Error(ErrorKind::InvalidTopicFilter, _) |
-            Error(ErrorKind::AlreadyConnected, _) => true,
-            _ => false
-        }
-    }
-}
-
 impl From<self::proto::ErrorKind> for Error {
     fn from(e: self::proto::ErrorKind) -> Error {
         Error::from(ErrorKind::Protocol(e))
