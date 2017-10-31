@@ -1,18 +1,17 @@
 use std::default::Default;
 
-use ::tokio_core::reactor::Handle;
 use ::tokio_io::{AsyncRead, AsyncWrite};
-use ::futures::Future;
-use ::futures::stream::Stream;
 use ::bytes::{Bytes};
+use ::actix::{SyncAddress, Arbiter};
+
 use ::proto::*;
 use ::types::{BoxMqttFuture, SubscriptionStream as SubStream};
-use ::tokio::{Loop, LoopClient, ClientReturn};
-use ::errors::{Result as MqttResult, ErrorKind, ResultExt};
+use ::errors::{Result as MqttResult};
 use ::persistence::Persistence;
 
 pub struct ClientConfig {
     pub connect_timeout: u64,
+    pub ping_timeout: u64,
     pub keep_alive: u16,
     pub version: ProtoLvl,
     pub lwt: Option<(String, QualityOfService, bool, Bytes)>,
@@ -25,6 +24,7 @@ impl Default for ClientConfig {
     fn default() -> ClientConfig {
         ClientConfig {
             connect_timeout: 30,
+            ping_timeout: 10,
             keep_alive: 0,
             version: ProtoLvl::V3_1_1,
             lwt: None,
@@ -48,9 +48,16 @@ impl ClientConfig {
     }
 
     /// Specify how long the client should wait for the server to acknowledge a connection request.
-    /// 0 means wait indefinetely.
+    /// 0 means wait indefinitely.
     pub fn connect_timeout(&mut self, t: u64) -> &mut ClientConfig {
         self.connect_timeout = t;
+        self
+    }
+
+    /// Specify how long the client should wait for a ping response.
+    /// 0 means wait indefinitely.
+    pub fn ping_timeout(&mut self, t: u64) -> &mut ClientConfig {
+        self.ping_timeout = t;
         self
     }
 
@@ -101,14 +108,8 @@ impl ClientConfig {
     }
 }
 
-enum ClientState {
-    Connected(LoopClient),
-    Disconnected
-}
-
 pub struct Client<P> where P: Persistence {
-    state: ClientState,
-    handle: Handle,
+    actor_address: SyncAddress<Arbiter>,
     persistence: P
 }
 
@@ -117,21 +118,26 @@ impl<P> Client<P> where P: Persistence {
     pub fn config() -> ClientConfig {
         ClientConfig::new()
     }
+
     /// Create a new client with the given configuration.
     ///
     /// `p` is an object that implements `Persistence` that holds in-flight packets for QoS1 and
     /// QoS2 publishing; this enables the client to maintain session across connections.
-    ///
-    /// `config` provides options to configure the client.
-    ///
-    /// `handle` is a `tokio-core::reactor::Handle`.
-    pub fn new(p: P, hdl: Handle) -> MqttResult<Client<P>>
-        where P: Persistence {
-        Ok(Client {
-            state: ClientState::Disconnected,
-            handle: hdl,
+    pub fn new(p: P) -> Client<P> where P: Persistence {
+        let arbiter = Arbiter::new(Some(String::from("mqtt")));
+        Client {
+            actor_address: arbiter,
             persistence: p
-        })
+        }
+    }
+
+    /// Create a client using a particular actor system. Useful if you plan to use the client in
+    /// an actor yourself.
+    pub fn new_with_system(p: P, address: SyncAddress<Arbiter>) -> Client<P> where P: Persistence {
+        Client {
+            actor_address: address,
+            persistence: p
+        }
     }
 
     /// Starts an MQTT session with the provided configuration.
@@ -153,56 +159,50 @@ impl<P> Client<P> where P: Persistence {
     /// `config` provides options to configure the client.
     pub fn connect<'p, I>(&'p mut self, io: I, cfg: &ClientConfig) -> MqttResult<Option<SubStream>>
     where I: AsyncRead + AsyncWrite + 'static, P: Persistence {
+        unimplemented!()
         // Setup a continual loop. This loop handles all the nitty gritty of reciving and
         // dispatching packets from the server. It essentially multiplexes packets to the correct
         // destination. Designed to run constantly on a Core loop, unless an error occurs.
-        if let ClientState::Connected(_) = self.state {
-            bail!(ErrorKind::AlreadyConnected);
-        } else {
-            let (lp, mut client) = Loop::new(io, &mut self.persistence, self.handle.clone(),
-                cfg.keep_alive as u64, cfg.connect_timeout)?;
 
-            // Prepare a connect packet to send using the provided values
-            let lwt = if let Some((ref t, ref q, ref r, ref m)) = cfg.lwt {
-                let topic = MqttString::from_str(&t)?;
-                Some(LWTMessage::new(topic, q.clone(), *r, m.clone()))
-            } else {
-                None
-            };
-            let client_id = if let Some(ref cid) = cfg.client_id {
-                Some(MqttString::from_str(&cid)?)
-            } else {
-                None
-            };
-            let cred = if let Some((ref user, ref p)) = cfg.creds {
-                let pwd = if let &Some(ref pass) = p {
-                    Some(MqttString::from_str(pass)?)
-                } else {
-                    None
-                };
-                Some((MqttString::from_str(&user)?, pwd))
-            } else {
-                None
-            };
-            let connect = MqttPacket::connect_packet(cfg.version, lwt, cred, cfg.clean,
-                cfg.keep_alive, client_id);
-            // Send packet
-            let res_fut = client.request(connect)?;
-            // Wait for acknowledgement
-            let res = res_fut.wait().chain_err(|| ErrorKind::LoopAbortError)?;
-
-            self.state = ClientState::Connected(client);
-
-            match res? {
-                ClientReturn::Onetime(_) => Ok(None),
-                ClientReturn::Ongoing(mut subs) => {
-                    match subs.pop() {
-                        Some(Ok((s, _))) =>  Ok(Some(s.boxed())),
-                        _ => unreachable!()
-                    }
-                },
-            }
-        }
+        // // Prepare a connect packet to send using the provided values
+        // let lwt = if let Some((ref t, ref q, ref r, ref m)) = cfg.lwt {
+        //     let topic = MqttString::from_str(&t)?;
+        //     Some(LWTMessage::new(topic, q.clone(), *r, m.clone()))
+        // } else {
+        //     None
+        // };
+        // let client_id = if let Some(ref cid) = cfg.client_id {
+        //     Some(MqttString::from_str(&cid)?)
+        // } else {
+        //     None
+        // };
+        // let cred = if let Some((ref user, ref p)) = cfg.creds {
+        //     let pwd = if let &Some(ref pass) = p {
+        //         Some(MqttString::from_str(pass)?)
+        //     } else {
+        //         None
+        //     };
+        //     Some((MqttString::from_str(&user)?, pwd))
+        // } else {
+        //     None
+        // };
+        // let connect = MqttPacket::connect_packet(cfg.version, lwt, cred, cfg.clean,
+        //     cfg.keep_alive, client_id);
+        // // Send packet
+        // let res_fut = client.request(connect)?;
+        // // Wait for acknowledgement
+        // let res = res_fut.wait().chain_err(|| ErrorKind::LoopAbortError)?;
+        //
+        //
+        // match res? {
+        //     ClientReturn::Onetime(_) => Ok(None),
+        //     ClientReturn::Ongoing(mut subs) => {
+        //         match subs.pop() {
+        //             Some(Ok((s, _))) =>  Ok(Some(s.boxed())),
+        //             _ => unreachable!()
+        //         }
+        //     },
+        // }
     }
 
     /// Issues a disconnect packet to the server and closes the network connection. The client will

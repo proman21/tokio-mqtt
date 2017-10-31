@@ -1,8 +1,7 @@
 use std::ops::Deref;
 use std::fmt;
 use ::bytes::{Bytes, BytesMut, BigEndian, BufMut};
-use ::errors::{Error, ErrorKind};
-use ::linked_hash_map::LinkedHashMap;
+use ::errors::ErrorKind;
 use ::errors::Result;
 
 static CRC_0_MESSAGE: &'static str = "0x00 Connection Accepted";
@@ -186,7 +185,7 @@ impl fmt::Display for QualityOfService {
 }
 
 enum_from_primitive!{
-    #[derive(Clone, Copy, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
     pub enum SubAckReturnCode {
         SuccessQoS0 = 0,
         SuccessQoS1 = 1,
@@ -239,14 +238,20 @@ impl LWTMessage {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+/// Provides a validated String type that conforms with MQTT requirment for UTF-8 strings with a
+/// maximum length of 65535 characters.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MqttString(String);
 
 impl MqttString {
+    /// Create an empty MQTT string
     pub fn new() -> MqttString {
         MqttString(String::new())
     }
 
+    /// Create a MQTT valid string from the provided str.
+    /// Will return `Err(ErrorKind::StringConversionError)` if the string is larger than 65535
+    /// characters.
     pub fn from_str(s: &str) -> Result<MqttString> {
         if s.len() > 0xFFFF {
             bail!(ErrorKind::StringConversionError)
@@ -255,6 +260,7 @@ impl MqttString {
         }
     }
 
+    /// Similar to `from_str`, except it will truncate the provided string down to 65535 characters
     pub fn from_str_lossy(s: &str) -> MqttString {
         let mut string = String::from(s);
         string.truncate(0xFFFF);
@@ -276,15 +282,15 @@ impl Deref for MqttString {
     }
 }
 
-impl Into<String> for MqttString {
-    fn into(self) -> String {
-        self.0
+impl From<MqttString> for String {
+    fn from(value: MqttString) -> String {
+        value.0
     }
 }
 
 pub type Credentials<T> = Option<(T, Option<T>)>;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Subscription {
     pub topic: MqttString,
     pub qos: QualityOfService
@@ -302,7 +308,7 @@ impl Subscription {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Payload {
     Connect(MqttString, Option<(MqttString, Vec<u8>)>, Credentials<MqttString>),
     Subscribe(Vec<Subscription>),

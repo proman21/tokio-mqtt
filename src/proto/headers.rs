@@ -1,6 +1,5 @@
 use std::ops::Deref;
 use std::str;
-use ::nom::{IResult, be_u16};
 use ::bytes::{Bytes, BytesMut, IntoBuf, Buf, BufMut, BigEndian};
 use ::enum_primitive::FromPrimitive;
 use super::types::*;
@@ -228,8 +227,11 @@ impl Header for ProtocolName {
     }
 
     fn parse_header(raw: &Bytes) -> Result<ProtocolName> {
-        str::from_utf8(raw).chain_err(|| ErrorKind::PacketDecodingError)
-            .and_then(|s| MqttString::from_str(s)).map(|s| ProtocolName(s))
+        str::from_utf8(raw)
+            .chain_err(|| ErrorKind::StringConversionError)
+            .and_then(|s| MqttString::from_str(s))
+            .map(|s| ProtocolName(s))
+            .chain_err(|| ErrorKind::PacketDecodingError)
     }
 
     fn fmt_header(&self, out: &mut BytesMut) -> Result<()> {
@@ -260,10 +262,11 @@ impl Header for TopicName {
     }
 
     fn parse_header(raw: &Bytes) -> Result<TopicName> {
-        match str::from_utf8(raw) {
-            Ok(t) => MqttString::from_str(t).map(|s| TopicName(s)),
-            Err(_) => bail!(ErrorKind::PacketDecodingError)
-        }
+        str::from_utf8(raw)
+            .chain_err(|| ErrorKind::StringConversionError)
+            .and_then(|t| MqttString::from_str(t))
+            .map(|s| TopicName(s))
+            .chain_err(|| ErrorKind::PacketDecodingError)
     }
 
     fn fmt_header(&self, out: &mut BytesMut) -> Result<()> {

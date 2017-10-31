@@ -1,4 +1,5 @@
 use std;
+use proto::MqttPacket;
 
 error_chain! {
     links {
@@ -22,12 +23,13 @@ error_chain! {
             description("Error decoding packet")
         }
 
-        PacketEncodingError {
+        PacketEncodingError(p: MqttPacket) {
             description("Error encoding packet")
+            display("A packet couldn't be encoded: {:?}", p)
         }
 
         LoopCommsError {
-            description("An error occured communicating with the loop")
+            description("An error occurred communicating with the loop")
         }
 
         LoopAbortError {
@@ -55,7 +57,7 @@ error_chain! {
         }
 
         ClientUnavailable {
-            description("Client is stopped or is disconnecting")
+            description("Client is stopped or is connecting/disconnecting")
         }
     }
 }
@@ -76,8 +78,8 @@ pub mod proto {
             }
 
             UnexpectedResponse(p: PacketType) {
-                description("Client recived an unexpected response")
-                display("Client recieved a unexpected {:?} packet from the server", p)
+                description("Client received an unexpected response")
+                display("Client received a unexpected {:?} packet from the server", p)
             }
 
             ConnectionRefused(c: ConnRetCode) {

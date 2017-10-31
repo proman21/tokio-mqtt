@@ -5,14 +5,12 @@ mod headers;
 pub use self::types::*;
 pub use self::headers::*;
 
-use std::io;
 use ::errors::{ErrorKind as MqttErrorKind, Result as MqttResult};
 use ::errors::proto;
 use ::nom::IResult;
 use ::linked_hash_map::LinkedHashMap;
-use ::bytes::{Bytes, BytesMut, BufMut, Writer};
+use ::bytes::{Bytes, BytesMut, BufMut};
 use self::parsers::packet;
-use self::headers::*;
 
 fn encode_vle(num: usize) -> Option<Bytes> {
     let mut collect: BytesMut = BytesMut::with_capacity(4);
@@ -36,7 +34,7 @@ fn encode_vle(num: usize) -> Option<Bytes> {
     return Some(collect.freeze());
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Headers {
     data: LinkedHashMap<String, Vec<u8>>
 }
@@ -73,7 +71,7 @@ pub trait Header: Sized {
     fn fmt_header(&self, out: &mut BytesMut) -> MqttResult<()>;
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MqttPacket {
     pub ty: PacketType,
     pub flags: PacketFlags,
@@ -95,7 +93,7 @@ impl MqttPacket {
         let slice = data.as_ref();
         match packet(slice) {
             IResult::Done(rest, (ty, fl, hd, pl)) => Ok(Some((MqttPacket {
-                ty: ty,
+                ty,
                 flags: fl,
                 headers: hd,
                 payload: pl
@@ -157,7 +155,7 @@ impl MqttPacket {
             creds
         );
 
-        headers.set(ProtocolName::new(MqttString::from_str_lossy("MQTT")));
+        headers.set(ProtocolName::new(MqttString::from_str("MQTT").expect("Valid MQTT string is invalid")));
         headers.set(ProtocolLevel::new(version));
         headers.set(ConnectFlags::new(flags));
         headers.set(KeepAlive::new(keep_alive));
@@ -165,8 +163,8 @@ impl MqttPacket {
         MqttPacket {
             ty: PacketType::Connect,
             flags: PacketFlags::empty(),
-            headers: headers,
-            payload: payload
+            headers,
+            payload
         }
     }
 
@@ -182,8 +180,8 @@ impl MqttPacket {
 
         MqttPacket {
             ty: PacketType::Publish,
-            flags: flags,
-            headers: headers,
+            flags,
+            headers,
             payload: Payload::Application(msg.to_vec())
         }
     }
@@ -194,7 +192,7 @@ impl MqttPacket {
         MqttPacket {
             ty: PacketType::PubAck,
             flags: PacketFlags::empty(),
-            headers: headers,
+            headers,
             payload: Payload::None
         }
     }
@@ -205,7 +203,7 @@ impl MqttPacket {
         MqttPacket {
             ty: PacketType::PubRec,
             flags: PacketFlags::empty(),
-            headers: headers,
+            headers,
             payload: Payload::None
         }
     }
@@ -216,7 +214,7 @@ impl MqttPacket {
         MqttPacket {
             ty: PacketType::PubRel,
             flags: PUBREL,
-            headers: headers,
+            headers,
             payload: Payload::None
         }
     }
@@ -227,7 +225,7 @@ impl MqttPacket {
         MqttPacket {
             ty: PacketType::PubComp,
             flags: PacketFlags::empty(),
-            headers: headers,
+            headers,
             payload: Payload::None
         }
     }
@@ -239,7 +237,7 @@ impl MqttPacket {
         MqttPacket {
             ty: PacketType::Subscribe,
             flags: SUB,
-            headers: headers,
+            headers,
             payload: Payload::Subscribe(subscriptions)
         }
     }
@@ -256,7 +254,7 @@ impl MqttPacket {
         MqttPacket {
             ty: PacketType::Unsubscribe,
             flags: UNSUB,
-            headers: headers,
+            headers,
             payload: Payload::Unsubscribe(subs)
         }
     }
