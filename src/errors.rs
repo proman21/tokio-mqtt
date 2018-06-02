@@ -1,5 +1,6 @@
 use std;
 use proto::MqttPacket;
+use futures::sync::oneshot::Canceled;
 
 error_chain! {
     links {
@@ -8,6 +9,7 @@ error_chain! {
 
     foreign_links {
         Io(std::io::Error);
+        LoopComms(Canceled);
     }
 
     errors {

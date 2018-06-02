@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
+#![recursion_limit="128"]
 
+#[macro_use]
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_io;
@@ -27,7 +29,12 @@ extern crate lazy_static;
 extern crate serde_derive;
 extern crate serde;
 extern crate bincode;
-extern crate actix;
+#[macro_use]
+extern crate slog;
+extern crate slog_stdlog;
+#[macro_use]
+extern crate derive_builder;
+
 
 mod errors;
 mod types;
@@ -36,9 +43,3 @@ mod client;
 mod persistence;
 mod backend;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-    }
-}

@@ -1,9 +1,11 @@
 mod types;
 mod parsers;
 mod headers;
+mod topic_filter;
 
 pub use self::types::*;
 pub use self::headers::*;
+pub use self::topic_filter::*;
 
 use ::errors::{ErrorKind as MqttErrorKind, Result as MqttResult};
 use ::errors::proto;
@@ -155,10 +157,10 @@ impl MqttPacket {
             creds
         );
 
-        headers.set(ProtocolName::new(MqttString::from_str("MQTT").expect("Valid MQTT string is invalid")));
-        headers.set(ProtocolLevel::new(version));
-        headers.set(ConnectFlags::new(flags));
-        headers.set(KeepAlive::new(keep_alive));
+        headers.set(ProtocolName::from(MqttString::from_str("MQTT").expect("Valid MQTT string is invalid")));
+        headers.set(ProtocolLevel::from(version));
+        headers.set(ConnectFlags::from(flags));
+        headers.set(KeepAlive::from(keep_alive));
 
         MqttPacket {
             ty: PacketType::Connect,
@@ -168,27 +170,40 @@ impl MqttPacket {
         }
     }
 
-    pub fn publish_packet(flags: PacketFlags, topic: MqttString, id: u16,
-        msg: Bytes) -> MqttPacket {
+    pub fn publish_packet(qos: QualityOfService, retain: bool, topic: MqttString, id: u16,
+                          msg: Vec<u8>) -> MqttPacket {
 
         let mut headers = Headers::new();
-        headers.set(TopicName::new(topic));
+        headers.set(TopicName::from(topic));
 
-        if flags.contains(QOS1 | QOS2) {
-            headers.set(PacketId::new(id));
+        let mut flags = PacketFlags::empty();
+
+        match qos {
+            QualityOfService::QoS1 => {
+                headers.set(PacketId::from(id));
+                flags.insert(QOS1);
+            },
+            QualityOfService::QoS2 => {
+                headers.set(PacketId::from(id));
+                flags.insert(QOS2);
+            }
+        }
+
+        if retain {
+            flags.insert(RET)
         }
 
         MqttPacket {
             ty: PacketType::Publish,
             flags,
             headers,
-            payload: Payload::Application(msg.to_vec())
+            payload: Payload::Application(msg)
         }
     }
 
     pub fn pub_ack_packet(id: u16) -> MqttPacket {
         let mut headers = Headers::new();
-        headers.set(PacketId::new(id));
+        headers.set(PacketId::from(id));
         MqttPacket {
             ty: PacketType::PubAck,
             flags: PacketFlags::empty(),
@@ -199,7 +214,7 @@ impl MqttPacket {
 
     pub fn pub_rec_packet(id: u16) -> MqttPacket {
         let mut headers = Headers::new();
-        headers.set(PacketId::new(id));
+        headers.set(PacketId::from(id));
         MqttPacket {
             ty: PacketType::PubRec,
             flags: PacketFlags::empty(),
@@ -210,7 +225,7 @@ impl MqttPacket {
 
     pub fn pub_rel_packet(id: u16) -> MqttPacket {
         let mut headers = Headers::new();
-        headers.set(PacketId::new(id));
+        headers.set(PacketId::from(id));
         MqttPacket {
             ty: PacketType::PubRel,
             flags: PUBREL,
@@ -221,7 +236,7 @@ impl MqttPacket {
 
     pub fn pub_comp_packet(id: u16) -> MqttPacket {
         let mut headers = Headers::new();
-        headers.set(PacketId::new(id));
+        headers.set(PacketId::from(id));
         MqttPacket {
             ty: PacketType::PubComp,
             flags: PacketFlags::empty(),
@@ -230,9 +245,9 @@ impl MqttPacket {
         }
     }
 
-    pub fn subscribe_packet(id: u16, subscriptions: Vec<Subscription>) -> MqttPacket {
+    pub fn subscribe_packet(id: u16, subscriptions: Vec<(MqttString, QualityOfService)>) -> MqttPacket {
         let mut headers = Headers::new();
-        headers.set(PacketId::new(id));
+        headers.set(PacketId::from(id));
 
         MqttPacket {
             ty: PacketType::Subscribe,
@@ -242,14 +257,14 @@ impl MqttPacket {
         }
     }
 
-    pub fn unsubscribe_packet(id: u16, subscriptions: Vec<Subscription>) -> MqttPacket {
+    pub fn unsubscribe_packet(id: u16, subscriptions: Vec<MqttString>) -> MqttPacket {
         let mut subs = Vec::new();
         for sub in subscriptions {
             subs.push(sub.topic);
         }
 
         let mut headers = Headers::new();
-        headers.set(PacketId::new(id));
+        headers.set(PacketId::from(id));
 
         MqttPacket {
             ty: PacketType::Unsubscribe,

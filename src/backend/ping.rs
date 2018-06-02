@@ -16,16 +16,28 @@ use backend::outbound_handlers::ping_req_handler;
 
 pub struct PingRequest;
 
-pub struct PingTimeout;
-
-impl<'p, I, P> ResponseType<PingTimeout> for Loop<'p, I, P>
-    where I: AsyncRead + AsyncWrite + 'static, P: 'p + Persistence {
+impl ResponseType for PingRequest {
     type Item = ();
     type Error = Error;
 }
 
-impl<'p, I, P> Handler<PingTimeout, Error> for Loop<'p, I, P>
-    where I: AsyncRead + AsyncWrite + 'static, P: 'p + Persistence {
+pub struct PingTimeout;
+
+impl ResponseType for PingTimeout {
+    type Item = ();
+    type Error = Error;
+}
+
+pub struct PingResponse(SpawnHandle);
+
+impl ResponseType for PingResponse {
+    type Item = ();
+    type Error = Error;
+}
+
+impl<I: 'static, P: 'static> Handler<PingTimeout, Error> for Loop<I, P>
+    where I: AsyncRead + AsyncWrite, P: Persistence {
+
     fn handle(&mut self, msg: PingTimeout, ctx: &mut FramedContext<Self>) -> Response<Self, PingTimeout> {
         match self.status {
             Some(LoopStatus::Disconnected) | Some(LoopStatus::PendingError(_)) => Loop::empty(),
@@ -38,30 +50,18 @@ impl<'p, I, P> Handler<PingTimeout, Error> for Loop<'p, I, P>
     }
 }
 
-impl<'p, I, P> ResponseType<SpawnHandle> for Loop<'p, I, P>
-    where I: AsyncRead + AsyncWrite + 'static, P: 'p + Persistence {
+impl<I: 'static, P: 'static> Handler<PingResponse, Canceled> for Loop<I, P>
+    where I: AsyncRead + AsyncWrite, P: Persistence {
 
-    type Item = ();
-    type Error = Error;
-}
-
-impl<'p, I, P> Handler<SpawnHandle, Canceled> for Loop<'p, I, P>
-    where I: AsyncRead + AsyncWrite + 'static, P: 'p + Persistence {
-    fn handle(&mut self, msg: SpawnHandle, ctx: &mut FramedContext<Self>) -> Response<Self, SpawnHandle> {
-        ctx.cancel_future(msg);
+    fn handle(&mut self, msg: PingResponse, ctx: &mut FramedContext<Self>) -> Response<Self, PingResponse> {
+        ctx.cancel_future(msg.0);
         self.timer = self.timer.or(Some(ctx.notify(PingRequest, self.keep_alive_dur())));
         Loop::empty()
     }
 }
 
-impl<'p, I, P> ResponseType<PingRequest> for Loop<'p, I, P>
-    where I: AsyncRead + AsyncWrite + 'static, P: 'p + Persistence {
-    type Item = ();
-    type Error = Error;
-}
-
-impl<'p, I, P> Handler<PingRequest, Error> for Loop<'p, I, P>
-    where I: AsyncRead + AsyncWrite + 'static, P: 'p + Persistence {
+impl<I: 'static, P: 'static> Handler<PingRequest, Error> for Loop<I, P>
+    where I: AsyncRead + AsyncWrite, P: Persistence {
 
     fn handle(&mut self, msg: PingRequest, ctx: &mut FramedContext<Self>) -> Response<Self, PingRequest> {
         match self.status {
@@ -80,7 +80,7 @@ impl<'p, I, P> Handler<PingRequest, Error> for Loop<'p, I, P>
                 });
                 match res {
                     Ok(()) => {
-                        ctx.add_future(rx.map(move |_| timeout_hdl));
+                        ctx.add_future(rx.map(move |_| PingResponse(timeout_hdl)));
                         Loop::empty()
                     }
                     Err(e) => Loop::reply_error(e)

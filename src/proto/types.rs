@@ -1,7 +1,7 @@
 use std::ops::Deref;
 use std::fmt;
 use ::bytes::{Bytes, BytesMut, BigEndian, BufMut};
-use ::errors::ErrorKind;
+use ::errors::{Error, ErrorKind};
 use ::errors::Result;
 
 static CRC_0_MESSAGE: &'static str = "0x00 Connection Accepted";
@@ -203,6 +203,7 @@ impl SubAckReturnCode {
     }
 }
 
+#[derive(Clone)]
 pub struct LWTMessage {
     pub topic: MqttString,
     pub qos: QualityOfService,
@@ -291,27 +292,9 @@ impl From<MqttString> for String {
 pub type Credentials<T> = Option<(T, Option<T>)>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Subscription {
-    pub topic: MqttString,
-    pub qos: QualityOfService
-}
-
-impl Subscription {
-    pub fn encode_all(&self, out: &mut BytesMut) {
-        out.reserve(self.topic.len() + 1);
-        self.topic.encode(out);
-        out.put_u8(self.qos.into());
-    }
-
-    pub fn encode_topic(&self, out: &mut BytesMut) {
-        self.topic.encode(out);
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Payload {
     Connect(MqttString, Option<(MqttString, Vec<u8>)>, Credentials<MqttString>),
-    Subscribe(Vec<Subscription>),
+    Subscribe(Vec<(MqttString, QualityOfService)>),
     SubAck(Vec<SubAckReturnCode>),
     Unsubscribe(Vec<MqttString>),
     Application(Vec<u8>),
@@ -337,8 +320,10 @@ impl Payload {
                 }
             },
             &Payload::Subscribe(ref subs) => {
-                for sub in subs {
-                    sub.encode_all(out);
+                for (topic, qos) in subs {
+                    out.reserve(topic.len() + 1);
+                    topic.encode(out);
+                    out.put_u8(qos.into());
                 }
             },
             &Payload::Unsubscribe(ref unsubs) => {

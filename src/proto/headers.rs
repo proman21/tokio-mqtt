@@ -8,8 +8,8 @@ use ::errors::{Result, ErrorKind, ResultExt};
 
 pub struct ConnectFlags(ConnFlags);
 
-impl ConnectFlags {
-    pub fn new(flags: ConnFlags) -> ConnectFlags {
+impl From<ConnFlags> for ConnectFlags {
+    fn from(flags: ConnFlags) -> ConnectFlags {
         ConnectFlags(flags)
     }
 }
@@ -40,8 +40,8 @@ impl Header for ConnectFlags {
 
 pub struct ConnectAckFlags(ConnAckFlags);
 
-impl ConnectAckFlags {
-    pub fn new(flags: ConnAckFlags) -> ConnectAckFlags {
+impl From<ConnAckFlags> for ConnectAckFlags {
+    fn from(flags: ConnAckFlags) -> ConnectAckFlags {
         ConnectAckFlags(flags)
     }
 }
@@ -72,8 +72,8 @@ impl Header for ConnectAckFlags {
 
 pub struct ConnectReturnCode(ConnRetCode);
 
-impl ConnectReturnCode {
-    pub fn new(code: ConnRetCode) -> ConnectReturnCode {
+impl From<ConnRetCode> for ConnectReturnCode {
+    fn from(code: ConnRetCode) -> ConnectReturnCode {
         ConnectReturnCode(code)
     }
 }
@@ -102,20 +102,20 @@ impl Header for ConnectReturnCode {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq, Hash)]
 pub struct PacketId(u16);
-
-impl PacketId {
-    pub fn new(id: u16) -> PacketId {
-        PacketId(id)
-    }
-}
 
 impl Deref for PacketId {
     type Target = u16;
 
     fn deref(&self) -> &u16 {
         &self.0
+    }
+}
+
+impl From<u16> for PacketId {
+    fn from(value: u16) -> Self {
+        PacketId(value)
     }
 }
 
@@ -140,8 +140,8 @@ impl Header for PacketId {
 
 pub struct KeepAlive(u16);
 
-impl KeepAlive {
-    pub fn new(ka: u16) -> KeepAlive {
+impl From<u16> for KeepAlive {
+    fn from(ka: u16) -> KeepAlive {
         KeepAlive(ka)
     }
 }
@@ -175,8 +175,8 @@ impl Header for KeepAlive {
 
 pub struct ProtocolLevel(ProtoLvl);
 
-impl ProtocolLevel {
-    pub fn new(level: ProtoLvl) -> ProtocolLevel {
+impl From<ProtoLvl> for ProtocolLevel {
+    fn from(level: ProtoLvl) -> ProtocolLevel {
         ProtocolLevel(level)
     }
 }
@@ -207,9 +207,9 @@ impl Header for ProtocolLevel {
 
 pub struct ProtocolName(MqttString);
 
-impl ProtocolName {
-    pub fn new(name: MqttString) -> ProtocolName {
-        ProtocolName(name)
+impl From<MqttString> for ProtocolName {
+    fn from(value: MqttString) -> Self {
+        ProtocolName(value)
     }
 }
 
@@ -242,9 +242,9 @@ impl Header for ProtocolName {
 
 pub struct TopicName(MqttString);
 
-impl TopicName {
-    pub fn new(name: MqttString) -> TopicName {
-        TopicName(name)
+impl From<MqttString> for TopicName {
+    fn from(value: MqttString) -> Self {
+        TopicName(value)
     }
 }
 
