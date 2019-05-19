@@ -1,0 +1,21 @@
+[package]
+name = "mqtt-proto"
+description = "Types for MQTTv3.1 protocol packets, as well as parser and encoder. Also contains a few extra utils for implementing the protocol."
+version = "1.0.0"
+authors = ["Adam Jacobus <adam.m.jacobus@gmail.com>"]
+categories = ["encoding", "network-programming", "parser-implementations"]
+keywords = ["mqtt", "mqtt-v3.1.1"]
+
+[dependencies]
+bitflags = "1.0"
+bytes = "0.4.12"
+nom = "4.2.3"
+enum_primitive = "0.1.1"
+regex = "0.2"
+failure = "0.1.5"
+failure_derive = "0.1.5"
+lazy_static = "0.2"
+derive_builder = "0.7"
+
+[dev-dependencies]
+nom-test-helpers = "2.0.0"

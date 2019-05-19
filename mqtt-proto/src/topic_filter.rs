@@ -1,4 +1,5 @@
 use ::regex::{escape, Regex};
+use ::failure::{Fallible, ensure, format_err};
 
 lazy_static!{
     static ref INVALID_MULTILEVEL: Regex = Regex::new("(?:[^/]#|#(?:.+))").unwrap();
@@ -7,19 +8,14 @@ lazy_static!{
 
 pub struct TopicFilter {
     matcher: Regex,
-    original: String
 }
 
 impl TopicFilter {
-    pub fn from_string(s: &str) -> Result<TopicFilter> {
+    pub fn from_string(s: &str) -> Fallible<TopicFilter> {
         // See if topic is legal
-        if INVALID_SINGLELEVEL.is_match(s) || INVALID_MULTILEVEL.is_match(s) {
-            bail!(ErrorKind::InvalidTopicFilter);
-        }
-
-        if s.is_empty() {
-            bail!(ErrorKind::InvalidTopicFilter);
-        }
+        ensure!(!(INVALID_SINGLELEVEL.is_match(s) || INVALID_MULTILEVEL.is_match(s)),
+            "Invalid topic filter.");
+        ensure!(!s.is_empty(), "Invalid topic filter.");
 
         let mut collect: Vec<String> = Vec::new();
         for tok in s.split("/") {
@@ -32,9 +28,9 @@ impl TopicFilter {
             }
         }
         let match_expr = format!("^{}$", collect.join("/"));
+        let match_regex = Regex::new(&match_expr).map_err(|_| format_err!("Invalid topic filter."))?;
         Ok(TopicFilter {
-            original: String::from(s),
-            matcher: Regex::new(&match_expr).chain_err(|| ErrorKind::InvalidTopicFilter)?
+            matcher: match_regex
         })
     }
 
