@@ -167,11 +167,11 @@ named!(pub sub_ack_return_code(&[u8]) -> SubAckReturnCode, map_opt!(
 ));
 
 named!(pub connect_packet(&[u8]) -> MqttPacket, do_parse!(
-    tag!("MQTT")              >>
-    protocol_level: proto_lvl >>
-    connect_flags: conn_flags >>
-    keep_alive: be_u16        >>
-    client_id: string         >>
+    length_value!(be_u16, tag!("MQTT")) >>
+    protocol_level: proto_lvl           >>
+    connect_flags: conn_flags           >>
+    keep_alive: be_u16                  >>
+    client_id: string                   >>
     lwt: cond!(
         connect_flags.intersects(ConnFlags::WILL_FLAG),
         tuple!(string, length_bytes!(be_u16))
