@@ -120,53 +120,70 @@ mod vle_tests {
     }
 }
 
-named!(pub conn_flags<&[u8], ConnFlags>, map_opt!(
+named!(conn_flags<&[u8], ConnFlags>, map_opt!(
     be_u8,
     |b| ConnFlags::from_bits(b)
 ));
 
-named!(pub conn_ack_flags<&[u8], ConnAckFlags>, map_opt!(
+#[cfg(test)]
+mod conn_flags_tests {
+    use super::*;
+    
+    #[test]
+    fn parse_valid_conn_flags() {
+        let input = [0xFE];
+        assert_eq!(conn_flags(&input), Ok((&[][..], ConnFlags::all())));
+    }
+    
+    #[test]
+    fn parse_invalid_conn_flags() {
+        let input = [0x01];
+        assert_eq!(conn_flags(&input), Err(Err::Error(error_position!(&input[..], ErrorKind::MapOpt))));
+    }
+}
+
+named!(conn_ack_flags<&[u8], ConnAckFlags>, map_opt!(
     be_u8,
     |b| ConnAckFlags::from_bits(b)
 ));
 
-named!(pub conn_ret_code(&[u8]) -> ConnRetCode, map_opt!(
+named!(conn_ret_code(&[u8]) -> ConnRetCode, map_opt!(
     be_u8,
     |b| ConnRetCode::from_u8(b)
 ));
 
-named!(pub string(&[u8]) -> &str, do_parse!(
+named!(string(&[u8]) -> &str, do_parse!(
     len: be_u16          >>
     utf8: take_str!(len) >>
     (utf8)
 ));
 
-named!(pub packet_type<&[u8], PacketType>, map_opt!(
+named!(packet_type<&[u8], PacketType>, map_opt!(
     bits!(take_bits!(u8, 4)),
     |b| PacketType::from_u8(b))
 );
 
-named!(pub packet_flags<&[u8], PacketFlags>, map_opt!(
+named!(packet_flags<&[u8], PacketFlags>, map_opt!(
     bits!(take_bits!(u8, 4)),
     |b| PacketFlags::from_bits(b))
 );
 
-named!(pub proto_lvl(&[u8]) -> ProtoLvl, map_opt!(
+named!(proto_lvl(&[u8]) -> ProtoLvl, map_opt!(
     be_u8,
     |b| ProtoLvl::from_u8(b)
 ));
 
-named!(pub qos(&[u8]) -> QualityOfService, map_opt!(
+named!(qos(&[u8]) -> QualityOfService, map_opt!(
     be_u8,
     |b| QualityOfService::from_u8(b)
 ));
 
-named!(pub sub_ack_return_code(&[u8]) -> SubAckReturnCode, map_opt!(
+named!(sub_ack_return_code(&[u8]) -> SubAckReturnCode, map_opt!(
     be_u8,
     |c| SubAckReturnCode::from_u8(c)
 ));
 
-named!(pub connect_packet(&[u8]) -> MqttPacket, do_parse!(
+named!(connect_packet(&[u8]) -> MqttPacket, do_parse!(
     length_value!(be_u16, tag!("MQTT")) >>
     protocol_level: proto_lvl           >>
     connect_flags: conn_flags           >>
@@ -206,7 +223,7 @@ named!(pub connect_ack_packet(&[u8]) -> MqttPacket, do_parse!(
     })
 ));
 
-named_args!(pub publish_packet(flags: PacketFlags) <MqttPacket>, do_parse!(
+named_args!(publish_packet(flags: PacketFlags) <MqttPacket>, do_parse!(
     topic_name: string >>
     packet_id: cond!(
         flags.intersects(PacketFlags::QOS1 | PacketFlags::QOS2),
@@ -223,13 +240,13 @@ named_args!(pub publish_packet(flags: PacketFlags) <MqttPacket>, do_parse!(
     })
 ));
 
-pub fn packet_id_header<'a, C>(input: &'a [u8], build: C) -> IResult<&'a [u8], MqttPacket<'a>>
+fn packet_id_header<'a, C>(input: &'a [u8], build: C) -> IResult<&'a [u8], MqttPacket<'a>>
     where C: Fn(u16) -> MqttPacket<'a>
 {
     map!(input, be_u16, build)
 }
 
-named!(pub subscribe_packet(&[u8]) -> MqttPacket, do_parse!(
+named!(subscribe_packet(&[u8]) -> MqttPacket, do_parse!(
     packet_id: be_u16 >>
     subscriptions: many1!(map!(tuple!(string, qos), |(t, q)| SubscriptionTuple(t, q))) >>
     (MqttPacket::Subscribe {
@@ -238,7 +255,7 @@ named!(pub subscribe_packet(&[u8]) -> MqttPacket, do_parse!(
     })
 ));
 
-named!(pub sub_ack_packet(&[u8]) -> MqttPacket, do_parse!(
+named!(sub_ack_packet(&[u8]) -> MqttPacket, do_parse!(
     packet_id: be_u16 >>
     return_codes: many1!(sub_ack_return_code) >>
     (MqttPacket::SubAck {
@@ -247,7 +264,7 @@ named!(pub sub_ack_packet(&[u8]) -> MqttPacket, do_parse!(
     })
 ));
 
-named!(pub unsubscribe_packet(&[u8]) -> MqttPacket, do_parse!(
+named!(unsubscribe_packet(&[u8]) -> MqttPacket, do_parse!(
     packet_id: be_u16 >>
     topics: many1!(string) >>
     (MqttPacket::Unsubscribe {
@@ -256,7 +273,7 @@ named!(pub unsubscribe_packet(&[u8]) -> MqttPacket, do_parse!(
     })
 ));
 
-named!(pub packet(&[u8]) -> MqttPacket, do_parse!(
+named!(pub(crate) packet(&[u8]) -> MqttPacket, do_parse!(
     ty: packet_type     >>
     flags: packet_flags >>
     packet: length_value!(vle, switch!(value!(ty),
