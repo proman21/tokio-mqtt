@@ -14,11 +14,6 @@ bitflags! {
         const QOS2 = 0b0100;
         const QOS1 = 0b0010;
         const RET  = 0b0001;
-
-        const CONNACK = Self::QOS1.bits;
-        const PUBREL  = Self::QOS1.bits;
-        const SUB     = Self::QOS1.bits;
-        const UNSUB   = Self::QOS1.bits;
     }
 }
 
