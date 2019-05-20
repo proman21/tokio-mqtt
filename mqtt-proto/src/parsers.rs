@@ -2,6 +2,7 @@ use std::collections::HashMap;
 pub use ::nom::{IResult, Err, be_u16, be_u8};
 use ::enum_primitive::FromPrimitive;
 use super::types::*;
+use super::MqttPacket;
 
 pub type HeaderMap<'a> = HashMap<&'static str, &'a [u8]>;
 
@@ -164,6 +165,96 @@ named!(pub sub_ack_return_code(&[u8]) -> SubAckReturnCode, map_opt!(
     be_u8,
     |c| SubAckReturnCode::from_u8(c)
 ));
+
+named!(pub connect_packet(&[u8]) -> MqttPacket, complete!(do_parse!(
+    tag!("MQTT")              >>
+    protocol_level: proto_lvl >>
+    connect_flags: conn_flags >>
+    keep_alive: be_u16        >>
+    client_id: string         >>
+    lwt: cond!(
+        connect_flags.intersects(ConnFlags::WILL_FLAG),
+        tuple!(string, length_bytes!(be_u16))
+    ) >>
+    username: cond!(
+        connect_flags.intersects(ConnFlags::USERNAME),
+        string
+    ) >>
+    password: cond!(
+        connect_flags.intersects(ConnFlags::PASSWORD),
+        length_bytes!(be_u16)
+    ) >>
+    (MqttPacket::Connect {
+        protocol_level,
+        clean_session: connect_flags.intersects(ConnFlags::CLEAN_SESS),
+        keep_alive,
+        client_id,
+        lwt: lwt.map(|(t, p)| LWTMessage::from_flags(connect_flags, t, p)),
+        credentials: username.map(|u| Credentials {
+            username: u,
+            password
+        })
+    })
+)));
+
+named!(pub connect_ack_packet(&[u8]) -> MqttPacket, complete!(do_parse!(
+    flags: conn_ack_flags >>
+    connect_return_code: conn_ret_code >>
+    (MqttPacket::ConnectAck {
+        session_present: flags.intersects(ConnAckFlags::SP),
+        connect_return_code
+    })
+)));
+
+named_args!(pub publish_packet(flags: PacketFlags) <MqttPacket>, complete!(do_parse!(
+    topic_name: string >>
+    packet_id: cond!(
+        flags.intersects(PacketFlags::QOS1 | PacketFlags::QOS2),
+        be_u16
+    ) >>
+    message: length_bytes!(be_u16) >>
+    (MqttPacket::Publish {
+        dup: flags.intersects(PacketFlags::DUP),
+        qos: flags.qos(),
+        retain: flags.intersects(PacketFlags::RET),
+        topic_name,
+        packet_id,
+        message
+    })
+)));
+
+pub fn packet_id_header<'a, C>(input: &'a [u8], build: C) -> IResult<&'a [u8], MqttPacket<'a>>
+    where C: Fn(u16) -> MqttPacket<'a>
+{
+    complete!(input, map!(be_u16, build))
+}
+
+named!(pub subscribe_packet(&[u8]) -> MqttPacket, complete!(do_parse!(
+    packet_id: be_u16 >>
+    subscriptions: many1!(map!(tuple!(string, qos), |(t, q)| SubscriptionTuple(t, q))) >>
+    (MqttPacket::Subscribe {
+        packet_id,
+        subscriptions
+    })
+)));
+
+named!(pub sub_ack_packet(&[u8]) -> MqttPacket, complete!(do_parse!(
+    packet_id: be_u16 >>
+    return_codes: many1!(sub_ack_return_code) >>
+    (MqttPacket::SubAck {
+        packet_id,
+        return_codes
+    })
+)));
+
+named!(pub unsubscribe_packet(&[u8]) -> MqttPacket, complete!(do_parse!(
+    packet_id: be_u16 >>
+    topics: many1!(string) >>
+    (MqttPacket::Unsubscribe {
+        packet_id,
+        topics
+    })
+)));
 
 named!(pub fixed_header(&[u8]) -> (PacketType, PacketFlags, usize), do_parse!(
     ty: packet_type     >>

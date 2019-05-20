@@ -251,16 +251,52 @@ pub trait Encodable {
     fn encoded_length(&self) -> usize;
 }
 
-impl<T: AsRef<[u8]>> Encodable for T {
+impl<T: Encodable> Encodable for Vec<T> {
     fn encode<B: BufMut>(&self, out: &mut B) {
-        out.put_u16_be(self.as_ref().len() as u16);
-        out.put_slice(self.as_ref());
+        for item in self {
+            item.encode(out);
+        }
+    }
+    
+    fn encoded_length(&self) -> usize {
+        self.into_iter().fold(0, |acc, t| acc + t.encoded_length())
+    }
+}
+
+impl Encodable for &[u8] {
+    fn encode<B: BufMut>(&self, out: &mut B) {
+        out.put_u16_be(self.len() as u16);
+        out.put_slice(self);
     }
 
     fn encoded_length(&self) -> usize {
-        2 + self.as_ref().len()
+        2 + self.len()
     }
 }
+
+impl Encodable for &str {
+    fn encode<B: BufMut>(&self, out: &mut B) {
+        out.put_u16_be(self.len() as u16);
+        out.put_slice(self.as_bytes());
+    }
+
+    fn encoded_length(&self) -> usize {
+        2 + self.len()
+    }
+}
+
+pub struct SubscriptionTuple<'a>(pub &'a str, pub QualityOfService);
+
+impl<'a> Encodable for SubscriptionTuple<'a> {
+    fn encode<B: BufMut>(&self, out: &mut B) {
+        self.0.encode(out);
+        self.1.encode(out);
+    }
+    
+    fn encoded_length(&self) -> usize {
+        self.0.encoded_length() + self.1.encoded_length()
+    }
+} 
 
 #[derive(Builder, Clone)]
 pub struct LWTMessage<T: AsRef<str>, P: AsRef<[u8]>> {
@@ -296,6 +332,17 @@ impl<T: AsRef<str>, P: AsRef<[u8]>> LWTMessage<T, P> {
         let mut flags: ConnFlags = self.qos.into();
         flags.set(ConnFlags::WILL_RETAIN, self.retain);
         flags
+    }
+}
+
+impl Encodable for LWTMessage<&str, &[u8]> {
+    fn encode<B: BufMut>(&self, out: &mut B) {
+        self.topic.encode(out);
+        self.message.encode(out);
+    }
+    
+    fn encoded_length(&self) -> usize {
+        self.topic.encoded_length() + self.message.encoded_length()
     }
 }
 
