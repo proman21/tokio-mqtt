@@ -9,7 +9,7 @@ extern crate regex;
 extern crate bytes;
 
 pub mod types;
-pub mod parsers;
+mod parsers;
 pub mod topic_filter;
 pub mod errors;
 pub mod packets;

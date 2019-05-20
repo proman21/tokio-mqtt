@@ -1,10 +1,7 @@
-use std::collections::HashMap;
 pub use ::nom::{IResult, Err, be_u16, be_u8, ErrorKind, Needed};
 use ::enum_primitive::FromPrimitive;
 use super::types::*;
 use super::MqttPacket;
-
-pub type HeaderMap<'a> = HashMap<&'static str, &'a [u8]>;
 
 /// Parses a single vle byte, returning the (value, multiplier, continuation) tuple
 fn vle_byte(input: &[u8], (value, multiplier): (usize, usize)) -> IResult<&[u8], RecurseResult<(usize, usize), usize>> {
