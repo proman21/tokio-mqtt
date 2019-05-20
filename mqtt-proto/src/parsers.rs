@@ -166,7 +166,7 @@ named!(pub sub_ack_return_code(&[u8]) -> SubAckReturnCode, map_opt!(
     |c| SubAckReturnCode::from_u8(c)
 ));
 
-named!(pub connect_packet(&[u8]) -> MqttPacket, complete!(do_parse!(
+named!(pub connect_packet(&[u8]) -> MqttPacket, do_parse!(
     tag!("MQTT")              >>
     protocol_level: proto_lvl >>
     connect_flags: conn_flags >>
@@ -195,18 +195,18 @@ named!(pub connect_packet(&[u8]) -> MqttPacket, complete!(do_parse!(
             password
         })
     })
-)));
+));
 
-named!(pub connect_ack_packet(&[u8]) -> MqttPacket, complete!(do_parse!(
+named!(pub connect_ack_packet(&[u8]) -> MqttPacket, do_parse!(
     flags: conn_ack_flags >>
     connect_return_code: conn_ret_code >>
     (MqttPacket::ConnectAck {
         session_present: flags.intersects(ConnAckFlags::SP),
         connect_return_code
     })
-)));
+));
 
-named_args!(pub publish_packet(flags: PacketFlags) <MqttPacket>, complete!(do_parse!(
+named_args!(pub publish_packet(flags: PacketFlags) <MqttPacket>, do_parse!(
     topic_name: string >>
     packet_id: cond!(
         flags.intersects(PacketFlags::QOS1 | PacketFlags::QOS2),
@@ -221,44 +221,59 @@ named_args!(pub publish_packet(flags: PacketFlags) <MqttPacket>, complete!(do_pa
         packet_id,
         message
     })
-)));
+));
 
 pub fn packet_id_header<'a, C>(input: &'a [u8], build: C) -> IResult<&'a [u8], MqttPacket<'a>>
     where C: Fn(u16) -> MqttPacket<'a>
 {
-    complete!(input, map!(be_u16, build))
+    map!(input, be_u16, build)
 }
 
-named!(pub subscribe_packet(&[u8]) -> MqttPacket, complete!(do_parse!(
+named!(pub subscribe_packet(&[u8]) -> MqttPacket, do_parse!(
     packet_id: be_u16 >>
     subscriptions: many1!(map!(tuple!(string, qos), |(t, q)| SubscriptionTuple(t, q))) >>
     (MqttPacket::Subscribe {
         packet_id,
         subscriptions
     })
-)));
+));
 
-named!(pub sub_ack_packet(&[u8]) -> MqttPacket, complete!(do_parse!(
+named!(pub sub_ack_packet(&[u8]) -> MqttPacket, do_parse!(
     packet_id: be_u16 >>
     return_codes: many1!(sub_ack_return_code) >>
     (MqttPacket::SubAck {
         packet_id,
         return_codes
     })
-)));
+));
 
-named!(pub unsubscribe_packet(&[u8]) -> MqttPacket, complete!(do_parse!(
+named!(pub unsubscribe_packet(&[u8]) -> MqttPacket, do_parse!(
     packet_id: be_u16 >>
     topics: many1!(string) >>
     (MqttPacket::Unsubscribe {
         packet_id,
         topics
     })
-)));
+));
 
-named!(pub fixed_header(&[u8]) -> (PacketType, PacketFlags, usize), do_parse!(
+named!(pub packet(&[u8]) -> MqttPacket, do_parse!(
     ty: packet_type     >>
     flags: packet_flags >>
-    re_len: vle         >>
-    (ty, flags, re_len)
+    packet: length_value!(vle, switch!(value!(ty),
+        PacketType::Connect => call!(connect_packet) |
+        PacketType::ConnectAck => call!(connect_ack_packet) |
+        PacketType::Publish => call!(publish_packet, flags) |
+        PacketType::PubAck => call!(packet_id_header, |id| MqttPacket::PubAck {packet_id: id}) |
+        PacketType::PubRec => call!(packet_id_header, |id| MqttPacket::PubRec {packet_id: id}) |
+        PacketType::PubRel =>  call!(packet_id_header, |id| MqttPacket::PubRel {packet_id: id}) |
+        PacketType::PubComp =>  call!(packet_id_header, |id| MqttPacket::PubComp {packet_id: id}) |
+        PacketType::Subscribe => call!(subscribe_packet) |
+        PacketType::SubAck => call!(sub_ack_packet) |
+        PacketType::Unsubscribe => call!(unsubscribe_packet) |
+        PacketType::UnsubAck => call!(packet_id_header, |id| MqttPacket::UnsubAck {packet_id: id}) |
+        PacketType::PingReq => value!(MqttPacket::PingReq) |
+        PacketType::PingResp => value!(MqttPacket::PingResp) |
+        PacketType::Disconnect => value!(MqttPacket::Disconnect)
+    )) >>
+    (packet)
 ));

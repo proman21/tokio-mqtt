@@ -25,6 +25,14 @@ fn encode_vle<B: BufMut>(num: usize, out: &mut B) -> Result<()> {
     Ok(())
 }
 
+fn string_len_check(s: &str) -> Result<()> {
+    if s.len() > 65535 {
+        Err(Error::StringTooBig(s.len()))
+    } else {
+        Ok(())
+    }
+}
+
 impl<'a> MqttPacket<'a> {
     pub fn packet_type(&self) -> PacketType {
         use self::MqttPacket::*;
@@ -78,31 +86,11 @@ impl<'a> MqttPacket<'a> {
     
     // Non monomorphized code path for parsing to reduce library size.
     fn from_slice(buf: &'a [u8]) -> Result<Option<(&'a [u8], MqttPacket<'a>)>> {
-        use self::PacketType::*;
-        let (rest, (ty, fl, re)) = fixed_header(buf.as_ref()).map_err(|e| Error::ParseFailure(e.into_error_kind()))?;
-
-        if rest.len() < re {
-            return Ok(None);
+        match packet(buf) {
+            Ok(t) => Ok(Some(t)),
+            Err(Err::Incomplete(_)) => Ok(None),
+            Err(e) => Err(Error::ParseFailure(e.into_error_kind()))
         }
-        let (remain, after) = rest.split_at(re);
-        let (_, packet) = match ty {
-            Connect => connect_packet(remain),
-            ConnectAck => connect_ack_packet(remain),
-            Publish => publish_packet(remain, fl),
-            PubAck => packet_id_header(remain, |id| MqttPacket::PubAck {packet_id: id}),
-            PubRec => packet_id_header(remain, |id| MqttPacket::PubRec {packet_id: id}),
-            PubRel => packet_id_header(remain, |id| MqttPacket::PubRel {packet_id: id}),
-            PubComp => packet_id_header(remain, |id| MqttPacket::PubComp {packet_id: id}),
-            Subscribe => subscribe_packet(remain),
-            SubAck => sub_ack_packet(remain),
-            Unsubscribe => unsubscribe_packet(remain),
-            UnsubAck => packet_id_header(remain, |id| MqttPacket::UnsubAck {packet_id: id}),
-            PingReq => complete!(remain, value!(MqttPacket::PingReq)),
-            PingResp => complete!(remain, value!(MqttPacket::PingResp)),
-            Disconnect => complete!(remain, value!(MqttPacket::Disconnect))
-        }.map_err(|e| Error::ParseFailure(e.into_error_kind()))?;
-
-        Ok(Some((after, packet)))
     }
     
     /// Attempt to encode the packet into a buffer.
@@ -173,7 +161,6 @@ impl<'a> MqttPacket<'a> {
                 topics.encode(out);
             },
             PingReq | PingResp | Disconnect => {}
-            _ => unimplemented!()
         }
 
         Ok(())
@@ -211,5 +198,54 @@ impl<'a> MqttPacket<'a> {
             2_097_152 => Some(4),
             _ => None
         }.map(|b| 1 + b + payload_size)
+    }
+    
+    /// Validates that the packet is correct according to the MQTT protocol rules.
+    ///
+    /// This function mostly just checks string lengths, as well as the Quality of Service rules for the Publish packet.
+    pub fn validate(&self) -> Result<()> {
+         use self::MqttPacket::*;
+         
+         match self {
+             Connect{ client_id, lwt, credentials, .. } => {
+                 string_len_check(client_id)?;
+                 
+                 if let Some(l) = lwt {
+                      string_len_check(l.topic)?;
+                 }
+                 
+                 if let Some(c) = credentials {
+                      string_len_check(c.username)?;
+                 }
+             },
+             Publish{topic_name, packet_id, qos, dup, ..} => {
+                string_len_check(topic_name)?;
+                
+                match qos {
+                    QualityOfService::QoS0 => {
+                        if *dup {
+                            return Err(Error::InvalidDupFlag);
+                        }
+                        
+                        if packet_id.is_some() {
+                            return Err(Error::UnexpectedPublishPacketId)
+                        }
+                    },
+                    QualityOfService::QoS1 | QualityOfService::QoS2 => {
+                        if packet_id.is_none() {
+                            return Err(Error::MissingPublishPacketId)
+                        }
+                    }
+                }
+             },
+             Unsubscribe{ topics, ..} => {
+                 for t in topics {
+                      string_len_check(t)?;
+                 }
+             },
+             _ => {}
+         }
+         
+         Ok(())
     }
 }

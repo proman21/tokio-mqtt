@@ -16,5 +16,11 @@ pub enum Error {
     #[fail(display = "Packet type {} is invalid", _0)]
     InvalidPacketType(u8),
     #[fail(display = "Error occurred while parsing packet: {:?}.", _0)]
-    ParseFailure(ErrorKind<u32>)
+    ParseFailure(ErrorKind<u32>),
+    #[fail(display = "DUP flag must be 0 for QoS0.")]
+    InvalidDupFlag,
+    #[fail(display = "Publish packet @ QoS1/QoS2 needs a packet id.")]
+    MissingPublishPacketId,
+    #[fail(display = "Publish packet @ QoS0 must not have a packet id.")]
+    UnexpectedPublishPacketId
 }
