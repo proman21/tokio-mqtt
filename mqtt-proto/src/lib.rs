@@ -8,9 +8,6 @@ extern crate failure_derive;
 extern crate regex;
 extern crate bytes;
 
-#[cfg(test)]
-#[macro_use] extern crate nom_test_helpers;
-
 pub mod types;
 pub mod parsers;
 pub mod topic_filter;

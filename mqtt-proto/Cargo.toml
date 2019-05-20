@@ -16,6 +16,3 @@ failure = "0.1.5"
 failure_derive = "0.1.5"
 lazy_static = "0.2"
 derive_builder = "0.7"
-
-[dev-dependencies]
-nom-test-helpers = "2.0.0"

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-pub use ::nom::{IResult, Err, be_u16, be_u8};
+pub use ::nom::{IResult, Err, be_u16, be_u8, ErrorKind, Needed};
 use ::enum_primitive::FromPrimitive;
 use super::types::*;
 use super::MqttPacket;
@@ -77,7 +77,7 @@ macro_rules! recurse_m(
 );
 
 /// Attempts to decode a variable length encoded number from the provided byte slice.
-named!(pub vle(&[u8]) -> usize, recurse_m!((0, 1), 5, vle_byte));
+named!(pub vle(&[u8]) -> usize, recurse_m!((0, 1), 4, vle_byte));
 
 #[cfg(test)]
 mod vle_tests {
@@ -86,37 +86,37 @@ mod vle_tests {
     #[test]
     fn one_byte_vle() {
         let input = [0x19, 0x7F, 0x7F, 0x7F];
-        assert_done_and_eq!(vle(&input), 25);
+        assert_eq!(vle(&input), Ok((&[0x7F, 0x7F, 0x7F][..], 25)));
     }
 
     #[test]
     fn two_byte_vle() {
         let input = [0xC1, 0x02, 0x7F, 0x7F];
-        assert_done_and_eq!(vle(&input), 321);
+        assert_eq!(vle(&input), Ok((&[0x7F, 0x7F][..], 321)));
     }
 
     #[test]
     fn three_byte_vle() {
         let input = [0x94, 0x80, 0x01, 0x7F];
-        assert_done_and_eq!(vle(&input), 16_404);
+        assert_eq!(vle(&input), Ok((&[0x7F][..], 16_404)));
     }
 
     #[test]
     fn four_byte_vle() {
         let input = [0xBC, 0x85, 0x80, 0x01];
-        assert_done_and_eq!(vle(&input), 2_097_852);
+        assert_eq!(vle(&input), Ok((&[][..], 2_097_852)));
     }
 
     #[test]
     fn overflow_vle() {
         let input = [0x80, 0x80, 0x80, 0x80, 0x01];
-        assert_error_and_eq!(vle(&input), error_code!(ErrorKind::Custom(0)))
+        assert_eq!(vle(&input), Err(Err::Error(error_position!(&input[3..], ErrorKind::Custom(666)))));
     }
 
     #[test]
     fn incomplete_vle() {
         let input = [0x80, 0x80];
-        assert_needs!(vle(&input), ?)
+        assert_eq!(vle(&input), Err(Err::Incomplete(Needed::Size(1))));
     }
 }
 
