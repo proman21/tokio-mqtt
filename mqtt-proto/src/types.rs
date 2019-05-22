@@ -79,7 +79,7 @@ bitflags! {
 
 impl ConnAckFlags {
     pub fn is_clean(&self) -> bool {
-        self.contains(Self::SP)
+        self.intersects(Self::SP)
     }
 }
 
