@@ -39,7 +39,7 @@ impl<'a> MqttPacket<'a> {
 
         match self {
             Connect {.. } => PacketType::Connect,
-            ConnectAck { .. } => PacketType::ConnectAck,
+            ConnAck { .. } => PacketType::ConnAck,
             Publish { .. } => PacketType::Publish,
             PubAck{ .. } => PacketType::PubAck,
             PubRec{ .. } => PacketType::PubRec,
@@ -59,7 +59,7 @@ impl<'a> MqttPacket<'a> {
         use ::MqttPacket::*;
 
         match self {
-            Connect { .. } | ConnectAck { .. } | PubAck{ .. } | PubRec{ .. } | PubRel{ .. } | PubComp{ .. } | 
+            Connect { .. } | ConnAck { .. } | PubAck{ .. } | PubRec{ .. } | PubRel{ .. } | PubComp{ .. } | 
                 SubAck { .. } | UnsubAck { .. } | PingReq | PingResp | Disconnect => PacketFlags::empty(),
             Publish { dup, qos, retain, ..} => {
                 let mut flags = PacketFlags::from(*qos);
@@ -131,7 +131,7 @@ impl<'a> MqttPacket<'a> {
                     c.encode(out);
                 }
             },
-            ConnectAck{ session_present, connect_return_code } => {
+            ConnAck{ session_present, connect_return_code } => {
                 let mut flags = ConnAckFlags::empty();
                 flags.set(ConnAckFlags::SP, *session_present);
                 out.put_u8(flags.bits());
@@ -174,7 +174,7 @@ impl<'a> MqttPacket<'a> {
                 10 + client_id.encoded_length() + lwt.as_ref().map_or(0, |l| l.encoded_length()) +
                 credentials.as_ref().map_or(0, |c| c.encoded_length())
             },
-            ConnectAck{ .. } | PubAck{..} | PubRec{..} | PubRel{..} | PubComp{..} | UnsubAck {..} => 2,
+            ConnAck{ .. } | PubAck{..} | PubRec{..} | PubRel{..} | PubComp{..} | UnsubAck {..} => 2,
             Publish{topic_name, message, packet_id, ..} => {
                 topic_name.encoded_length() + packet_id.and(Some(2)).unwrap_or(0) + message.encoded_length()
             },

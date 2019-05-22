@@ -26,7 +26,7 @@ pub enum MqttPacket<'a> {
         lwt: Option<LWTMessage<&'a str, &'a [u8]>>,
         credentials: Option<Credentials<&'a str, &'a [u8]>>
     },
-    ConnectAck {
+    ConnAck {
         session_present: bool,
         connect_return_code: ConnRetCode,
     },

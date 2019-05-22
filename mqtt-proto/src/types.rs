@@ -87,7 +87,7 @@ enum_from_primitive! {
     #[derive(Clone, Copy, Debug)]
     pub enum PacketType {
         Connect     = 1,
-        ConnectAck  = 2,
+        ConnAck  = 2,
         Publish     = 3,
         PubAck      = 4,
         PubRec      = 5,

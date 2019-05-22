@@ -211,10 +211,10 @@ named!(connect_packet(&[u8]) -> MqttPacket, do_parse!(
     })
 ));
 
-named!(pub connect_ack_packet(&[u8]) -> MqttPacket, do_parse!(
+named!(pub conn_ack_packet(&[u8]) -> MqttPacket, do_parse!(
     flags: conn_ack_flags >>
     connect_return_code: conn_ret_code >>
-    (MqttPacket::ConnectAck {
+    (MqttPacket::ConnAck {
         session_present: flags.intersects(ConnAckFlags::SP),
         connect_return_code
     })
@@ -275,7 +275,7 @@ named!(pub(crate) packet(&[u8]) -> MqttPacket, do_parse!(
     flags: packet_flags >>
     packet: length_value!(vle, switch!(value!(ty),
         PacketType::Connect => call!(connect_packet) |
-        PacketType::ConnectAck => call!(connect_ack_packet) |
+        PacketType::ConnAck => call!(conn_ack_packet) |
         PacketType::Publish => call!(publish_packet, flags) |
         PacketType::PubAck => call!(packet_id_header, |id| MqttPacket::PubAck {packet_id: id}) |
         PacketType::PubRec => call!(packet_id_header, |id| MqttPacket::PubRec {packet_id: id}) |
