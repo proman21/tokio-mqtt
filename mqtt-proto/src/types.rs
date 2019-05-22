@@ -184,14 +184,6 @@ enum_from_primitive! {
     }
 }
 
-impl ProtoLvl {
-    pub fn as_u8(&self) -> u8 {
-        match *self {
-            ProtoLvl::V3_1_1 => 4
-        }
-    }
-}
-
 enum_from_primitive! {
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum QualityOfService {
