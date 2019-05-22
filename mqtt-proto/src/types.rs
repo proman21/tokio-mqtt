@@ -103,6 +103,28 @@ enum_from_primitive! {
     }
 }
 
+impl fmt::Display for PacketType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::PacketType::*;
+        match self {
+            Connect => write!(f, "CONNECT"),
+            ConnAck => write!(f, "CONN_ACK"),
+            Publish => write!(f, "PUBLISH"),
+            PubAck => write!(f, "PUBACK"),
+            PubRec => write!(f, "PUBREC"),
+            PubRel => write!(f, "PUBREL"),
+            PubComp => write!(f, "PUBCOMP"),
+            Subscribe => write!(f, "SUBSCRIBE"),
+            SubAck => write!(f, "SUBACK"),
+            Unsubscribe => write!(f, "UNSUBSCRIBE"),
+            UnsubAck => write!(f, "UNSUBACK"),
+            PingReq => write!(f, "PINGREQ"),
+            PingResp => write!(f, "PINGRESP"),
+            Disconnect => write!(f, "DISCONNECT") 
+        }
+    }
+}
+
 enum_from_primitive! {
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum ConnRetCode {
