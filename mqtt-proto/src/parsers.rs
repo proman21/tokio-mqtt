@@ -3,18 +3,6 @@ use ::enum_primitive::FromPrimitive;
 use super::types::*;
 use super::MqttPacket;
 
-/// Parses a single vle byte, returning the (value, multiplier, continuation) tuple
-fn vle_byte(input: &[u8], (value, multiplier): (usize, usize)) -> IResult<&[u8], RecurseResult<(usize, usize), usize>> {
-    map!(input, be_u8, |b| {
-        let new_val = value + (b as usize & 127) * multiplier;
-        if b & 128 == 0 {
-            RecurseResult::Done(new_val)
-        } else {
-            RecurseResult::Continue((new_val, multiplier * 128))
-        }
-    })
-}
-
 enum RecurseResult<C, D> {
     Continue(C),
     Done(D)
@@ -72,6 +60,18 @@ macro_rules! recurse_m(
         }
     });
 );
+
+/// Parses a single vle byte, returning the (value, multiplier, continuation) tuple
+fn vle_byte(input: &[u8], (value, multiplier): (usize, usize)) -> IResult<&[u8], RecurseResult<(usize, usize), usize>> {
+    map!(input, be_u8, |b| {
+        let new_val = value + (b as usize & 127) * multiplier;
+        if b & 128 == 0 {
+            RecurseResult::Done(new_val)
+        } else {
+            RecurseResult::Continue((new_val, multiplier * 128))
+        }
+    })
+}
 
 /// Attempts to decode a variable length encoded number from the provided byte slice.
 named!(pub vle(&[u8]) -> usize, recurse_m!((0, 1), 4, vle_byte));
@@ -155,15 +155,21 @@ named!(string(&[u8]) -> &str, do_parse!(
     (utf8)
 ));
 
-named!(packet_type<&[u8], PacketType>, map_opt!(
-    bits!(take_bits!(u8, 4)),
-    |b| PacketType::from_u8(b))
-);
+named!(packet_type_flags(&[u8]) -> ((PacketType, PacketFlags)), bits!(do_parse!(
+    ty: packet_type >>
+    flags: packet_flags >>
+    (ty, flags)
+)));
 
-named!(packet_flags<&[u8], PacketFlags>, map_opt!(
-    bits!(take_bits!(u8, 4)),
-    |b| PacketFlags::from_bits(b))
-);
+named!(packet_type<(&[u8], usize), PacketType>, map_opt!(
+    take_bits!(u8, 4),
+    |b| PacketType::from_u8(b)
+));
+
+named!(packet_flags<(&[u8], usize), PacketFlags>, map_opt!(
+    take_bits!(u8, 4),
+    |b| PacketFlags::from_bits(b)
+));
 
 named!(proto_lvl(&[u8]) -> ProtoLvl, map_opt!(
     be_u8,
@@ -211,7 +217,7 @@ named!(connect_packet(&[u8]) -> MqttPacket, do_parse!(
     })
 ));
 
-named!(pub conn_ack_packet(&[u8]) -> MqttPacket, do_parse!(
+named!(conn_ack_packet(&[u8]) -> MqttPacket, do_parse!(
     flags: conn_ack_flags >>
     connect_return_code: conn_ret_code >>
     (MqttPacket::ConnAck {
@@ -271,23 +277,27 @@ named!(unsubscribe_packet(&[u8]) -> MqttPacket, do_parse!(
 ));
 
 named!(pub(crate) packet(&[u8]) -> MqttPacket, do_parse!(
-    ty: packet_type     >>
-    flags: packet_flags >>
-    packet: length_value!(vle, switch!(value!(ty),
-        PacketType::Connect => call!(connect_packet) |
-        PacketType::ConnAck => call!(conn_ack_packet) |
-        PacketType::Publish => call!(publish_packet, flags) |
-        PacketType::PubAck => call!(packet_id_header, |id| MqttPacket::PubAck {packet_id: id}) |
-        PacketType::PubRec => call!(packet_id_header, |id| MqttPacket::PubRec {packet_id: id}) |
-        PacketType::PubRel =>  call!(packet_id_header, |id| MqttPacket::PubRel {packet_id: id}) |
-        PacketType::PubComp =>  call!(packet_id_header, |id| MqttPacket::PubComp {packet_id: id}) |
-        PacketType::Subscribe => call!(subscribe_packet) |
-        PacketType::SubAck => call!(sub_ack_packet) |
-        PacketType::Unsubscribe => call!(unsubscribe_packet) |
-        PacketType::UnsubAck => call!(packet_id_header, |id| MqttPacket::UnsubAck {packet_id: id}) |
-        PacketType::PingReq => value!(MqttPacket::PingReq) |
-        PacketType::PingResp => value!(MqttPacket::PingResp) |
-        PacketType::Disconnect => value!(MqttPacket::Disconnect)
+    first: packet_type_flags >> // This will change to tuple destructuring when it is available in nom. (Geal/nom#869)
+    packet: length_value!(vle, switch!(value!(first.0),
+        PacketType::Connect => cond_reduce!(first.1.contains(PacketFlags::empty()), connect_packet) |
+        PacketType::ConnAck => cond_reduce!(first.1.contains(PacketFlags::empty()), conn_ack_packet) |
+        PacketType::Publish => call!(publish_packet, first.1) |
+        PacketType::PubAck => cond_reduce!(first.1.contains(PacketFlags::empty()),
+            call!(packet_id_header, |id| MqttPacket::PubAck {packet_id: id})) |
+        PacketType::PubRec => cond_reduce!(first.1.contains(PacketFlags::empty()),
+            call!(packet_id_header, |id| MqttPacket::PubRec {packet_id: id})) |
+        PacketType::PubRel =>  cond_reduce!(first.1.contains(PacketFlags::empty()),
+            call!(packet_id_header, |id| MqttPacket::PubRel {packet_id: id})) |
+        PacketType::PubComp =>  cond_reduce!(first.1.contains(PacketFlags::empty()),
+            call!(packet_id_header, |id| MqttPacket::PubComp {packet_id: id})) |
+        PacketType::Subscribe => cond_reduce!(first.1.contains(PacketFlags::QOS1), subscribe_packet) |
+        PacketType::SubAck => cond_reduce!(first.1.contains(PacketFlags::empty()), sub_ack_packet) |
+        PacketType::Unsubscribe => cond_reduce!(first.1.contains(PacketFlags::QOS1), unsubscribe_packet) |
+        PacketType::UnsubAck => cond_reduce!(first.1.contains(PacketFlags::empty()),
+            call!(packet_id_header, |id| MqttPacket::UnsubAck {packet_id: id})) |
+        PacketType::PingReq => cond_reduce!(first.1.contains(PacketFlags::empty()), value!(MqttPacket::PingReq)) |
+        PacketType::PingResp => cond_reduce!(first.1.contains(PacketFlags::empty()), value!(MqttPacket::PingResp)) |
+        PacketType::Disconnect => cond_reduce!(first.1.contains(PacketFlags::empty()), value!(MqttPacket::Disconnect))
     )) >>
     (packet)
 ));
