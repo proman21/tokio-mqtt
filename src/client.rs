@@ -7,8 +7,8 @@ use futures::prelude::*;
 use futures::{future, sync, unsync};
 use slog::Logger;
 use slog_stdlog;
+use mqtt3_proto::{MqttPacket, ProtoLvl, LWTMessage};
 
-use proto::*;
 use backend::{Loop, MqttCodec, ClientReturn, Connect, LoopMessage};
 use types::{MqttFuture, Subscription};
 use errors::{Result as MqttResult, Error, ErrorKind};
@@ -26,7 +26,7 @@ use persistence::Persistence;
 ///  - Client ID: empty
 ///  - Logger: `log`
 #[derive(Clone, Builder)]
-#[builder(setter(into), build_fn(validate = "Self::validate"))]
+#[builder(setter(into), build_fn(validate = "validate"))]
 pub struct Config {
     /// Specify how long the client should wait for the server to acknowledge a connection request.
     /// 0 means wait indefinitely.
@@ -50,17 +50,17 @@ pub struct Config {
     ///  - The client fails to communicate before the keep-alive time expires
     ///  - The client closes the connection without sending a disconnect message
     ///  - A protocol error occurs
-    #[builder(default)]
-    pub lwt: Option<(String, QualityOfService, bool, Bytes)>,
+    #[builder(default = "None")]
+    pub lwt: Option<LWTMessage<String, Vec<u8>>,
     /// Specify the credentials the client will use when connecting to the server.
-    #[builder(default)]
-    pub credentials: Credentials<String>,
+    #[builder(default = "None")]
+    pub credentials: Option<Credentials<String< Vec<u8>>>,
     /// Specify whether the server should treat this session as clean.
     #[builder(default = "true")]
     pub clean: bool,
     /// Set the ID used to identify this client to the server. If clean is false and this client
     /// has a session stored on the server, you must set this value to the ID used in past sessions.
-    #[builder(default)]
+    #[builder(default = "None")]
     pub client_id: Option<String>,
     /// Specify a logger for the client. Defaults to passing to `log`
     #[builder(default = "self.default_logger()?")]

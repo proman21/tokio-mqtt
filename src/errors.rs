@@ -27,7 +27,7 @@ error_chain! {
 
         PacketEncodingError(p: MqttPacket) {
             description("Error encoding packet")
-            display("A packet couldn't be encoded: {:?}", p)
+            display("A packet could not be encoded: {:?}", p)
         }
 
         LoopCommsError {
@@ -60,49 +60,6 @@ error_chain! {
 
         ClientUnavailable {
             description("Client is stopped or is connecting/disconnecting")
-        }
-    }
-}
-
-impl From<self::proto::ErrorKind> for Error {
-    fn from(e: self::proto::ErrorKind) -> Error {
-        Error::from(ErrorKind::Protocol(e))
-    }
-}
-
-pub mod proto {
-    use ::proto::{PacketType, ConnRetCode, QualityOfService};
-    error_chain!{
-        errors {
-            ResponseTimeout(p: PacketType) {
-                description("Timeout waiting for server response")
-                display("Server took too long to respond to {:?} packet", p)
-            }
-
-            UnexpectedResponse(p: PacketType) {
-                description("Client received an unexpected response")
-                display("Client received a unexpected {:?} packet from the server", p)
-            }
-
-            ConnectionRefused(c: ConnRetCode) {
-                description("Connect request denied by the server")
-                display("Server denied connection with this response: {}", c)
-            }
-
-            SubscriptionRejected(t: String, q: QualityOfService) {
-                description("Server rejected a subscription")
-                display("A subscription to '{}'@{} was rejected by the server", t, q)
-            }
-
-            InvalidPacket(s: String) {
-                description("An invalid packet was encountered")
-                display("Invalid packet found while decoding: {}", s)
-            }
-
-            QualityOfServiceError(q: QualityOfService, s: String) {
-                description("An error occurred while processing a service flow")
-                display("While processing a {} flow, the following error occurred: {}", q, s)
-            }
         }
     }
 }

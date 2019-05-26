@@ -94,13 +94,16 @@ impl<'a> MqttPacket<'a> {
     }
     
     /// Attempt to encode the packet into a buffer.
-    /// If the packet size is too big to be encoded, an error will be raised.
+    /// 
+    /// If the packet is invalid or is too big to be encoded, an error will be raised.
     ///
     /// # Panics
     /// Panics if `out` does not have enough capacity to contain the packet. Use `len()` to determine the size of the
     /// encoded packet.
     pub fn encode<B: BufMut>(&self, out: &mut B) -> Result<()> {
         use self::MqttPacket::*;
+        
+        self.validate()?;
         
         out.put_u8(((self.packet_type() as u8) << 4) + self.packet_flags().bits());
 
@@ -202,7 +205,7 @@ impl<'a> MqttPacket<'a> {
     
     /// Validates that the packet is correct according to the MQTT protocol rules.
     ///
-    /// This function mostly just checks string lengths, as well as the Quality of Service rules for the Publish packet.
+    /// This function checks string lengths, as well as the Quality of Service rules for the Publish packet.
     pub fn validate(&self) -> Result<()> {
          use self::MqttPacket::*;
          
@@ -218,6 +221,11 @@ impl<'a> MqttPacket<'a> {
                       string_len_check(c.username)?;
                  }
              },
+             ConnAck{session_present, connect_return_code} => {
+                 if session_present & connect_return_code.is_err() {
+                     return Err(Error::UnexpectedSessionPresent);
+                 }
+             }
              Publish{topic_name, packet_id, qos, dup, ..} => {
                 string_len_check(topic_name)?;
                 
