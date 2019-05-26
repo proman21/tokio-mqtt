@@ -1,5 +1,7 @@
 use std::fmt;
-use ::bytes::{BufMut};
+use std::convert::{TryFrom, From};
+use bytes::{BufMut};
+use errors::*;
 
 static CRC_0_MESSAGE: &'static str = "0x00 Connection Accepted";
 static CRC_1_MESSAGE: &'static str = "0x01 Connection Refused, unacceptable protocol version";
@@ -9,7 +11,7 @@ static CRC_4_MESSAGE: &'static str = "0x04 Connection Refused, bad user name or 
 static CRC_5_MESSAGE: &'static str = "0x05 Connection Refused, not authorized";
 
 bitflags! {
-    pub struct PacketFlags: u8 {
+    pub(crate) struct PacketFlags: u8 {
         const DUP  = 0b1000;
         const QOS2 = 0b0100;
         const QOS1 = 0b0010;
@@ -50,7 +52,7 @@ impl From<QualityOfService> for PacketFlags {
 }
 
 bitflags! {
-    pub struct ConnFlags: u8 {
+    pub(crate) struct ConnFlags: u8 {
         const USERNAME    = 0b10000000;
         const PASSWORD    = 0b01000000;
         const WILL_RETAIN = 0b00100000;
@@ -58,6 +60,28 @@ bitflags! {
         const WILL_QOS1   = 0b00001000;
         const WILL_FLAG   = 0b00000100;
         const CLEAN_SESS  = 0b00000010;
+    }
+}
+
+impl ConnFlags {
+    pub fn is_clean(&self) -> bool {
+        self.intersects(ConnFlags::CLEAN_SESS)
+    }
+    
+    pub fn has_username(&self) -> bool {
+        self.intersects(ConnFlags::USERNAME)
+    }
+    
+    pub fn has_password(&self) -> bool {
+        self.intersects(ConnFlags::PASSWORD)
+    }
+    
+    pub fn lwt_retain(&self) -> bool {
+        self.intersects(ConnFlags::WILL_RETAIN)
+    }
+    
+    pub fn has_lwt(&self) -> bool {
+        self.intersects(ConnFlags::WILL_FLAG)
     }
 }
 
@@ -72,7 +96,7 @@ impl From<QualityOfService> for ConnFlags {
 }
 
 bitflags! {
-    pub struct ConnAckFlags: u8 {
+    pub(crate) struct ConnAckFlags: u8 {
         const SP = 0b0001;
     }
 }
@@ -84,10 +108,11 @@ impl ConnAckFlags {
 }
 
 enum_from_primitive! {
+    /// Types of packets in the MQTT Protocol.
     #[derive(Clone, Copy, Debug)]
     pub enum PacketType {
         Connect     = 1,
-        ConnAck  = 2,
+        ConnAck     = 2,
         Publish     = 3,
         PubAck      = 4,
         PubRec      = 5,
@@ -100,6 +125,14 @@ enum_from_primitive! {
         PingReq     = 12,
         PingResp    = 13,
         Disconnect  = 14,
+    }
+}
+
+impl TryFrom<u8> for PacketType {
+    type Error = Error;
+    
+    fn try_from(value: u8) -> Result<PacketType> {
+        PacketType::from_u8(value).ok_or(Error::UnknownPacketType(value))
     }
 }
 
@@ -177,6 +210,7 @@ impl fmt::Display for ConnRetCode {
 }
 
 enum_from_primitive! {
+    /// The protocol version used by a connection.
     #[derive(Clone, Copy, Debug, PartialEq)]
     #[allow(non_camel_case_types)]
     pub enum ProtoLvl {
@@ -184,11 +218,29 @@ enum_from_primitive! {
     }
 }
 
+impl TryFrom<u8> for ProtoLvl {
+    type Error = Error;
+    
+    fn try_from(value: u8) -> Result<ProtoLvl> {
+        ProtoLvl::from_bits(value).ok_or(Error::InvalidProtocol(value))
+    }
+}
+
 enum_from_primitive! {
+    /// Set of quality of service levels a message can be sent with. These provide certain guarantees about the delivery
+    /// of messages.
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum QualityOfService {
+        /// QoS Level 1: At most once delivery.
+        /// The server will not respond to the message and the client will not attempt resending.
         QoS0 = 0,
+        /// QoS Level 2: At least once delivery.
+        /// The server will acknowledge the receiving of the message. Message might be sent more then once if an
+        /// acknowledgement is not received in time.
         QoS1 = 1,
+        /// QoS Level 3: Exactly once delivery.
+        /// The client and server will both ensure the message is received by requiring a two-step acknowledgement that
+        /// prevents loss or duplication.
         QoS2 = 2
     }
 }
@@ -223,40 +275,24 @@ impl Encodable for QualityOfService {
     fn encoded_length(&self) -> usize { 1 }
 }
 
-enum_from_primitive!{
-    #[derive(Clone, Debug, Copy)]
-    pub enum SubAckReturnCode {
-        SuccessQoS0 = 0,
-        SuccessQoS1 = 1,
-        SuccessQoS2 = 2,
-        Failure     = 128,
-    }
-}
-
-impl SubAckReturnCode {
-    pub fn qos(&self) -> Option<QualityOfService> {
-        use self::SubAckReturnCode::*;
-        match self {
-            &SuccessQoS0 => Some(QualityOfService::QoS0),
-            &SuccessQoS1 => Some(QualityOfService::QoS1),
-            &SuccessQoS2 => Some(QualityOfService::QoS2),
-            &Failure => None,
-        }
-    }
-}
-
-impl Encodable for SubAckReturnCode {
+impl Encodable for Option<QualityOfService> {
     fn encode<B: BufMut>(&self, out: &mut B) {
-            out.put_u8(*self as u8)
+        let code = match self {
+            Some(QualityOfService::QoS0) => 0,
+            Some(QualityOfService::QoS1) => 1,
+            Some(QualityOfService::QoS2) => 2,
+            None => 128
+        };
+        out.put_u8(code);
     }
 
     fn encoded_length(&self) -> usize { 1 }
 }
 
-pub trait Encodable {
-    /// Encodes the packet section into a buffer.
+pub(crate) trait Encodable {
+    // Encodes the packet section into a buffer.
     fn encode<B: BufMut>(&self, out: &mut B);
-    /// Returns the size of the encoded section.
+    // Returns the size of the encoded section.
     fn encoded_length(&self) -> usize;
 }
 
@@ -294,6 +330,7 @@ impl Encodable for &str {
     }
 }
 
+/// A tuple of the topic and requested Quality of Service level for a subscription request.
 pub struct SubscriptionTuple<'a>(pub &'a str, pub QualityOfService);
 
 impl<'a> Encodable for SubscriptionTuple<'a> {
@@ -307,6 +344,10 @@ impl<'a> Encodable for SubscriptionTuple<'a> {
     }
 } 
 
+/// A Last Will and Testament message.
+/// 
+/// This type holds the Last Will and Testament message sent to the server upon connection. If the client unexpectedly
+/// disconnects, this message will be sent by the server.
 #[derive(Builder, Clone)]
 pub struct LWTMessage<T: AsRef<str>, P: AsRef<[u8]>> {
     pub topic: T,
@@ -319,7 +360,7 @@ pub struct LWTMessage<T: AsRef<str>, P: AsRef<[u8]>> {
 }
 
 impl<T: AsRef<str>, P: AsRef<[u8]>> LWTMessage<T, P> {
-    pub fn from_flags(flags: ConnFlags, t: T, m: P) -> LWTMessage<T, P> {
+    pub(crate) fn from_flags(flags: ConnFlags, t: T, m: P) -> LWTMessage<T, P> {
         LWTMessage {
             topic: t,
             qos: flags.into(),
@@ -355,14 +396,14 @@ impl Encodable for LWTMessage<&str, &[u8]> {
     }
 }
 
-/// Container for MQTT credentials, with a username and optional password.
+/// Container for MQTT credentials, which is a username and optional password.
 pub struct Credentials<U: AsRef<str>, P: AsRef<[u8]>> {
     pub username: U,
     pub password: Option<P>
 }
 
 impl<U: AsRef<str>, P: AsRef<[u8]>> Credentials<U, P> {
-    /// Converts Credentials<U, P> to Credentials<&str, &[u8]>
+    /// Converts `Credentials<U, P>` to `Credentials<&str, &[u8]>`
     pub fn as_ref(&self) -> Credentials<&str, &[u8]> {
         Credentials {
             username: self.username.as_ref(),

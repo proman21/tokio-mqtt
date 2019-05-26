@@ -34,6 +34,10 @@ fn string_len_check(s: &str) -> Result<()> {
 }
 
 impl<'a> MqttPacket<'a> {
+    /// Returns the type of this MQTT Control packet.
+    ///
+    /// It may be easier to use the `MqttPacket` type in a match statement so that the identification and use of the
+    /// packet contents is easier. This method is provided for convenience.
     pub fn packet_type(&self) -> PacketType {
         use self::MqttPacket::*;
 
@@ -55,7 +59,7 @@ impl<'a> MqttPacket<'a> {
         }
     }
     
-    pub fn packet_flags(&self) -> PacketFlags {
+    fn packet_flags(&self) -> PacketFlags {
         use ::MqttPacket::*;
 
         match self {
@@ -79,7 +83,7 @@ impl<'a> MqttPacket<'a> {
     /// If there is not enough bytes in the slice to create a fully formed packet, `Ok(None)` will
     /// be returned.
     ///
-    /// If an error occurs decoding the bytes, an error will be returned.
+    /// If an problem occurs while decoding the bytes, an error will be returned.
     pub fn from_buf<B: AsRef<[u8]>>(buf: &'a B) -> Result<Option<(&'a [u8], MqttPacket<'a>)>> {
         MqttPacket::from_slice(buf.as_ref())
     }
@@ -89,7 +93,9 @@ impl<'a> MqttPacket<'a> {
         match packet(buf) {
             Ok(t) => Ok(Some(t)),
             Err(Err::Incomplete(_)) => Ok(None),
-            Err(e) => Err(Error::ParseFailure(e.into_error_kind()))
+            Err(e) => {
+                
+            }
         }
     }
     
@@ -155,9 +161,9 @@ impl<'a> MqttPacket<'a> {
                 out.put_u16_be(*packet_id);
                 subscriptions.encode(out);
             },
-            SubAck{ packet_id, return_codes } => {
+            SubAck{ packet_id, results } => {
                 out.put_u16_be(*packet_id);
-                return_codes.encode(out);
+                results.encode(out);
             },
             Unsubscribe{ packet_id, topics } => {
                 out.put_u16_be(*packet_id);
@@ -184,7 +190,7 @@ impl<'a> MqttPacket<'a> {
             Subscribe{ subscriptions, .. } => {
                 2 + subscriptions.encoded_length()
             },
-            SubAck{ return_codes, ..} => 2 + return_codes.encoded_length(),
+            SubAck{ return_codes, ..} => 2 + results.encoded_length(),
             Unsubscribe{ topics, ..} => 2 + topics.encoded_length(),
             PingReq | PingResp | Disconnect => 0
         }
