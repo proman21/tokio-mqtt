@@ -12,11 +12,15 @@ pub mod types;
 mod parsers;
 pub mod topic_filter;
 pub mod errors;
-pub mod packets;
+mod packets;
 
 pub use types::*;
 pub use topic_filter::*;
 
+/// A enumeration of possible control packets used in the MQTT Protocol.
+///
+/// This type abstracts the on-wire representation of an MQTT Control packet to prevent the formation of invalid
+/// packets. It also attempts to be a memory efficient as possible using a zero-copy parser.
 pub enum MqttPacket<'a> {
     Connect {
         protocol_level: ProtoLvl,
@@ -56,7 +60,7 @@ pub enum MqttPacket<'a> {
     },
     SubAck {
         packet_id: u16,
-        return_codes: Vec<SubAckReturnCode>
+        results: Vec<Option<QualityOfService>>
     },
     Unsubscribe {
         packet_id: u16,
