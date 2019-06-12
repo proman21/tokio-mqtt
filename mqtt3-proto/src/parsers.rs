@@ -1,84 +1,109 @@
-use nom::{IResult, Err, be_u16, be_u8, ErrorKind, Needed};
-use enum_primitive::FromPrimitive;
+use std::convert::TryFrom;
+use std::str;
+
+use nom::{IResult, Err};
+use nom::error::*;
+use nom::number::streaming::{be_u8, be_u16};
+use nom::bits::{bits, streaming::take_bits};
+use nom::multi::many1;
+use nom::bytes::streaming::take;
+use nom::combinator::{complete, flat_map, map, cond, map_parser};
+use nom::sequence::tuple;
+
 use super::types::*;
+use super::errors::Error;
 use super::MqttPacket;
 
-enum RecurseResult<C, D> {
-    Continue(C),
-    Done(D)
+#[derive(PartialEq, Debug)]
+pub(crate) struct ParserError<'a>(Option<Error<'a>>);
+
+impl<'a> ParserError<'a> {
+    pub fn some(e: Error<'a>) -> ParserError<'a> {
+        ParserError(Some(e))
+    }
+
+    pub fn none() -> ParserError<'a> {
+        ParserError(None)
+    }
+
+    pub fn into_inner(self) -> Option<Error<'a>> {
+        self.0
+    }
 }
 
-/// Creates a recursive parser chain that passes the results of each invocation of the parser to
-/// to the next invocation. The parser uses the `RecurseResult` enum to signal the stop of the
-/// recursion.
-///
-/// ```ignore
-/// recurse!(C, (I, C) -> IResult<I, RecurseResult<C, D>>) -> IResult<I, D>
-/// ```
-// macro_rules! recurse(
-//     ($i:expr, $s:expr, $f:expr) => ({
-//         use $crate::nom::ErrorKind;
-//
-//         let mut cont = $s;
-//         let mut i = $i;
-//         loop {
-//             match add_return_error!(i, ErrorKind::Custom(666), call!($f, cont))? {
-//                 (rest, RecurseResult::Continue(c)) => {
-//                     i = rest;
-//                     cont = c;
-//                 },
-//                 (rest, RecurseResult::Done(d)) => return Ok((rest, d)),
-//             }
-//         }
-//     });
-// );
+impl<'a> From<Option<Error<'a>>> for ParserError<'a> {
+    fn from(value: Option<Error<'a>>) -> ParserError<'a> {
+        ParserError(value)
+    }
+}
 
-/// Similar to `recurse!()`, except limits the number of recursions allowed to `max` exclusive.
-///
-/// ```ignore
-/// recurse_m!(C, max, (I, C) -> IResult<I, RecurseResult<C, D>>) -> IResult<I, D>
-/// ```
-macro_rules! recurse_m(
-    ($i:expr, $s:expr, $m:expr, $f:expr) => ({
-        use $crate::nom::ErrorKind;
+impl<'a> ParseError<&'a [u8]> for ParserError<'a> {
+    fn from_error_kind(_: &'a [u8], _: ErrorKind) -> ParserError<'a> {
+        ParserError::none()
+    }
 
-        let mut cont = $s;
-        let mut i = $i;
-        let mut depth = $m;
-        loop {
-            match add_return_error!(i, ErrorKind::Custom(666), call!($f, cont))? {
-                (rest, RecurseResult::Continue(c)) => {
-                    if depth <= 1 {
-                        return Err(Err::Error(error_position!(i, ErrorKind::Custom(666))));
-                    }
-                    depth -= 1;
-                    i = rest;
-                    cont = c;
-                },
-                (rest, RecurseResult::Done(d)) => return Ok((rest, d)),
-            }
+    fn append(_: &'a [u8], _: ErrorKind, other: ParserError<'a>) -> ParserError<'a> {
+        other
+    }
+}
+
+impl<'a> ParseError<(&'a [u8], usize)> for ParserError<'a> {
+    fn from_error_kind(_: (&'a [u8], usize), _: ErrorKind) -> ParserError<'a> {
+        ParserError::none()
+    }
+
+    fn append(_: (&'a [u8], usize), _: ErrorKind, other: ParserError<'a>) -> ParserError<'a> {
+        other
+    }
+}
+
+type ParserResult<'a, I, O> = IResult<I, O, ParserError<'a>>;
+
+fn map_res_err<I: Clone, O1, O2, E: ParseError<I>, F, G>(first: F, second: G) -> impl Fn(I) -> IResult<I, O2, E>
+where
+    F: Fn(I) -> IResult<I, O1, E>,
+    G: Fn(O1) -> Result<O2, E>
+{
+    move |input: I| {
+        let i = input.clone();
+        let (input, o1) = first(input)?;
+        match second(o1) {
+            Ok(o2) => Ok((input, o2)),
+            Err(e) => Err(Err::Error(E::append(i, ErrorKind::MapRes, e)))
         }
-    });
-);
-
-/// Parses a single vle byte, returning the (value, multiplier) tuple
-fn vle_byte(input: &[u8], (value, multiplier): (usize, usize)) -> IResult<&[u8], RecurseResult<(usize, usize), usize>> {
-    map!(input, be_u8, |b| {
-        let new_val = value + (b as usize & 127) * multiplier;
-        if b & 128 == 0 {
-            RecurseResult::Done(new_val)
-        } else {
-            RecurseResult::Continue((new_val, multiplier * 128))
-        }
-    })
+    }
 }
 
 /// Attempts to decode a variable length encoded number from the provided byte slice.
-named!(pub vle(&[u8]) -> usize, recurse_m!((0, 1), 4, vle_byte));
+fn vle(input: &[u8]) -> ParserResult<&[u8], usize> {
+    let mut value = 0;
+    let mut multiplier = 1;
+    let mut i = input;
+
+    loop {
+        let (rest, b) = be_u8(i)?;
+
+        value += (b as usize & 127) * multiplier;
+
+        if multiplier > 128*128*128 {
+            return Err(Err::Failure(ParserError::some(Error::VleOverflow)));
+        }
+
+        multiplier *= 128;
+        i = rest;
+
+        if b & 128 == 0 {
+            break;
+        }
+    }
+
+    Ok((i, value))
+}
 
 #[cfg(test)]
 mod vle_tests {
-    use super::*;
+    use super::{vle, ParserError, Err, Error};
+    use nom::Needed;
 
     #[test]
     fn one_byte_vle() {
@@ -117,67 +142,81 @@ mod vle_tests {
     }
 }
 
-named!(packet_type_flags(&[u8]) -> ((PacketType, PacketFlags)), bits!(do_parse!(
-    ty: map_res_err!(
-        take_bits!(u8, 4),
-        |b| PacketType::try_from(b)
-    ) >>
-    flags: map_res_err!(
-        take_bits!(u8, 4),
-        |b| PacketFlags::try_from(b)
-    ) >>
-    (ty, flags)
-)));
-
-#[cfg(test)]
-mod conn_flags_tests {
-    use super::*;
-    
-    #[test]
-    fn parse_valid_conn_flags() {
-        let input = [0xFE];
-        assert_eq!(conn_flags(&input), Ok((&[][..], ConnFlags::all())));
-    }
-    
-    #[test]
-    fn parse_invalid_conn_flags() {
-        let input = [0x01];
-        assert_eq!(conn_flags(&input),
-            Err(Err::Error(error_position!(&input[..], ErrorKind::Custom(7)))));
+fn add_error<'a, I, O, F, G>(parser: F, op: G) -> impl Fn(I) -> ParserResult<'a, I, O>
+where
+    F: Fn(I) -> ParserResult<'a, I, O>,
+    G: Fn() -> Error<'a>
+{
+    move |input: I| match parser(input) {
+        Ok(o) => Ok(o),
+        Err(Err::Incomplete(n)) => Err(Err::Incomplete(n)),
+        Err(Err::Error(e)) => Err(Err::Error(e.into_inner().or(Some(op())).into())),
+        Err(Err::Failure(e)) => Err(Err::Failure(e.into_inner().or(Some(op())).into()))
     }
 }
 
-named!(string(&[u8]) -> &str, do_parse!(
-    len: be_u16          >>
-    utf8: return_error!(ErrorKind::Custom(10), take_str!(len)) >>
-    (utf8)
-));
+fn mqtt_string<'a>(input: &'a [u8]) -> ParserResult<'a, &'a [u8], MqttString<'a>> {
+    map_res_err(
+        map_res_err(
+            flat_map(be_u16, take),
+            |b| str::from_utf8(b)
+                .map_err(|e| ParserError(Some(Error::StringNotUtf8{ input: b.clone(), source: e })))
+        ),
+        |s| MqttString::new(s).map_err(|e| ParserError::some(e))
+    )(input)
+}
 
-named!(connect_packet(&[u8]) -> MqttPacket, do_parse!(
-    add_return_error!(ErrorKind::Custom(11), length_value!(be_u16, tag!("MQTT"))) >>
-    protocol_level: return_error!(ErrorKind::Custom(4), map_opt!(
+#[cfg(test)]
+mod mqtt_string_tests {
+    use super::{mqtt_string, MqttString, ParserError, Err, Error};
+    use nom::Needed;
+
+    #[test]
+    fn normal_strings() {
+        let one = [0, 4, 77, 81, 84, 84];
+        assert_eq!(mqtt_string(&one), Ok((&[][..], MqttString::new_unchecked("MQTT"))));
+    }
+}
+
+fn connect_packet<'a>(input: &'a [u8]) -> ParserResult<'a, &'a [u8], MqttPacket<'a>> {
+    // Headers
+    let (r1, _) = map_res_err(mqtt_string, |name| if name.as_ref() == "MQTT" {
+        Ok(name)
+    } else {
+        Err(ParserError::some(Error::InvalidProtocolName{ name: name }))
+    })(input)?;
+
+    let (r2, protocol_level) = map_res_err(
         be_u8,
-        |b| ProtoLvl::from_u8(b)
-    )) >>
-    connect_flags: return_error!(ErrorKind::Custom(7), map_opt!(
+        |pl| ProtoLvl::try_from(pl).map_err(|e| ParserError::some(e))
+    )(r1)?;
+
+    let (r3, connect_flags) = map_res_err(
         be_u8,
-        |b| ConnFlags::from_bits(b)
-    )) >>
-    keep_alive: be_u16 >>
-    client_id: string >>
-    lwt: cond!(
+        |cf| ConnFlags::try_from(cf).map_err(|e| ParserError::some(e))
+    )(r2)?;
+
+    let (r4, keep_alive) = be_u16(r3)?;
+
+    // Payload
+    let (r5, client_id) = mqtt_string(r4)?;
+
+    let (r6, lwt) = cond(
         connect_flags.has_lwt(),
-        tuple!(string, length_bytes!(be_u16))
-    ) >>
-    username: cond!(
+        tuple((mqtt_string, flat_map(be_u16, take)))
+    )(r5)?;
+
+    let (r7, username) = cond(
         connect_flags.has_username(),
-        string
-    ) >>
-    password: cond!(
+        mqtt_string
+    )(r6)?;
+
+    let (r8, password) = cond(
         connect_flags.has_password(),
-        length_bytes!(be_u16)
-    ) >>
-    (MqttPacket::Connect {
+        flat_map(be_u16, take)
+    )(r7)?;
+
+    Ok((r8, MqttPacket::Connect {
         protocol_level,
         clean_session: connect_flags.is_clean(),
         keep_alive,
@@ -187,121 +226,163 @@ named!(connect_packet(&[u8]) -> MqttPacket, do_parse!(
             username: u,
             password
         })
-    })
-));
+    }))
+}
 
-named!(conn_ack_packet(&[u8]) -> MqttPacket, do_parse!(
-    flags: return_error!(ErrorKind::Custom(8), map_opt!(
+fn conn_ack_packet<'a>(input: &'a [u8]) -> ParserResult<'a, &'a [u8], MqttPacket<'a>> {
+    // Headers
+    let (r1, flags) = map_res_err(
         be_u8,
-        |b| ConnAckFlags::from_bits(b)
-    )) >>
-    connect_return_code: return_error!(ErrorKind::Custom(9), map_opt!(
-        be_u8,
-        |b| ConnRetCode::from_u8(b)
-    )) >>
-    (MqttPacket::ConnAck {
-        session_present: flags.is_clean(),
-        connect_return_code
-    })
-));
+        |b| ConnAckFlags::try_from(b).map_err(|e| ParserError::some(e))
+    )(input)?;
 
-named_args!(publish_packet(flags: PacketFlags) <MqttPacket>, do_parse!(
-    topic_name: string >>
-    packet_id: cond!(
+    let (r2, result) = map_res_err(
+        be_u8,
+        |c| connect_result_from_u8(c).map_err(|e| ParserError::some(e))
+    )(r1)?;
+    
+    Ok((r2, MqttPacket::ConnAck {
+        result: result.and(Ok(flags))
+    }))
+}
+
+fn publish_packet<'a>(input: &'a [u8], flags: PacketFlags) -> ParserResult<'a, &'a [u8], MqttPacket<'a>> {
+    // Headers
+    let (r1, topic_name) = mqtt_string(input)?;
+    
+    let (r2, packet_id) = cond(
         flags.intersects(PacketFlags::QOS1 | PacketFlags::QOS2),
         be_u16
-    ) >>
-    message: length_bytes!(be_u16) >>
-    (MqttPacket::Publish {
+    )(r1)?;
+
+    // Payload
+    let (r3, message) = flat_map(be_u16, take)(r2)?;
+
+    Ok((r3, MqttPacket::Publish {
         dup: flags.is_duplicate(),
         qos: flags.qos(),
         retain: flags.is_retain(),
         topic_name,
         packet_id,
         message
-    })
-));
-
-fn packet_id_header<'a, C>(input: &'a [u8], build: C) -> IResult<&'a [u8], MqttPacket<'a>>
-    where C: Fn(u16) -> MqttPacket<'a>
-{
-    map!(input, be_u16, build)
+    }))
 }
 
-named!(subscribe_packet(&[u8]) -> MqttPacket, do_parse!(
-    packet_id: be_u16 >>
-    subscriptions: map!(
-        many1!(tuple!(string, return_error!(ErrorKind::Custom(5), map_opt!(
-            be_u8,
-            |b| QualityOfService::from_u8(b)
-        )))),
+fn packet_id_header<'a, C>(input: &'a [u8], build: C) -> ParserResult<&'a [u8], MqttPacket<'a>>
+    where C: Fn(u16) -> MqttPacket<'a>
+{
+    map(be_u16, build)(input)
+}
+
+fn subscribe_packet<'a>(input: &'a [u8]) -> ParserResult<'a, &'a [u8], MqttPacket<'a>> {
+    // Headers
+    let (r1, packet_id) = be_u16(input)?;
+
+    // Payload
+    let (r2, subscriptions) = add_error(many1(map(
+        tuple((
+            mqtt_string,
+            map_res_err(
+                be_u8,
+                |b| QualityOfService::try_from(b).map_err(|e| ParserError::some(e))
+            )
+        )),
         |(t, q)| SubscriptionTuple(t, q)
-    ) >>
-    (MqttPacket::Subscribe {
+    )), || Error::MissingPayload)(r1)?;
+
+    Ok((r2, MqttPacket::Subscribe {
         packet_id,
         subscriptions
-    })
-));
+    }))
+}
 
-named!(sub_ack_packet(&[u8]) -> MqttPacket, do_parse!(
-    packet_id: be_u16 >>
-    results: many1!(return_error!(ErrorKind::Custom(6), map_opt!(
+fn sub_ack_packet<'a>(input: &'a [u8]) -> ParserResult<&'a [u8], MqttPacket<'a>> {
+    // Headers
+    let (r1, packet_id) = be_u16(input)?;
+
+    // Payload
+    let (r2, results) = add_error(many1(map_res_err(
         be_u8,
-        |c| {
-            match c {
-                0 => Ok(Some(QualityOfService::QoS0)),
-                1 => Ok(Some(QualityOfService::QoS1)),
-                2 => Ok(Some(QualityOfService::QoS2)),
-                128 => Ok(None),
-                _ => Err(Error::InvalidSubAckReturnCode(value))
-            }
+        |code| match code {
+            0 => Ok(Some(QualityOfService::QoS0)),
+            1 => Ok(Some(QualityOfService::QoS1)),
+            2 => Ok(Some(QualityOfService::QoS2)),
+            128 => Ok(None),
+            _ => Err(ParserError::some(Error::InvalidSubAckReturnCode{ return_code: code }))
         }
-    ))) >>
-    (MqttPacket::SubAck {
+    )), || Error::MissingPayload)(r1)?;
+
+    Ok((r2, MqttPacket::SubAck {
         packet_id,
         results
-    })
-));
+    }))
+}
 
-named!(unsubscribe_packet(&[u8]) -> MqttPacket, do_parse!(
-    packet_id: be_u16 >>
-    topics: many1!(string) >>
-    (MqttPacket::Unsubscribe {
+fn unsubscribe_packet<'a>(input: &'a [u8]) -> ParserResult<&'a [u8], MqttPacket<'a>> {
+    // Headers
+    let (r1, packet_id) = be_u16(input)?;
+
+    // Payload
+    let (r2, topics) = add_error(many1(mqtt_string), || Error::MissingPayload)(r1)?;
+
+    Ok((r2, MqttPacket::Unsubscribe {
         packet_id,
         topics
-    })
-));
+    }))
+}
 
-named!(pub(crate) packet(&[u8]) -> MqttPacket, do_parse!(
-    first: packet_type_flags >> // This will change to tuple destructuring when it is available in nom. (Geal/nom#869)
-    packet: length_value!(vle, switch!(value!(first.0),
-        PacketType::Connect => cond_reduce!(first.1.contains(PacketFlags::empty()),
-            connect_packet) |
-        PacketType::ConnAck => cond_reduce!(first.1.contains(PacketFlags::empty()),
-            conn_ack_packet) |
-        PacketType::Publish => call!(publish_packet, first.1) |
-        PacketType::PubAck => cond_reduce!(first.1.contains(PacketFlags::empty()),
-            call!(packet_id_header, |id| MqttPacket::PubAck {packet_id: id})) |
-        PacketType::PubRec => cond_reduce!(first.1.contains(PacketFlags::empty()),
-            call!(packet_id_header, |id| MqttPacket::PubRec {packet_id: id})) |
-        PacketType::PubRel =>  cond_reduce!(first.1.contains(PacketFlags::empty()),
-            call!(packet_id_header, |id| MqttPacket::PubRel {packet_id: id})) |
-        PacketType::PubComp =>  cond_reduce!(first.1.contains(PacketFlags::empty()),
-            call!(packet_id_header, |id| MqttPacket::PubComp {packet_id: id})) |
-        PacketType::Subscribe => cond_reduce!(first.1.contains(PacketFlags::QOS1),
-            subscribe_packet) |
-        PacketType::SubAck => cond_reduce!(first.1.contains(PacketFlags::empty()),
-            sub_ack_packet) |
-        PacketType::Unsubscribe => cond_reduce!(first.1.contains(PacketFlags::QOS1),
-            unsubscribe_packet) |
-        PacketType::UnsubAck => cond_reduce!(first.1.contains(PacketFlags::empty()),
-            call!(packet_id_header, |id| MqttPacket::UnsubAck {packet_id: id})) |
-        PacketType::PingReq => cond_reduce!(first.1.contains(PacketFlags::empty()),
-            value!(MqttPacket::PingReq)) |
-        PacketType::PingResp => cond_reduce!(first.1.contains(PacketFlags::empty()),
-            value!(MqttPacket::PingResp)) |
-        PacketType::Disconnect => cond_reduce!(first.1.contains(PacketFlags::empty()),
-            value!(MqttPacket::Disconnect))
-    )) >>
-    (packet)
-));
+fn packet_body<'a>(ty: PacketType, flags: PacketFlags) -> impl Fn(&'a [u8]) -> ParserResult<&'a [u8], MqttPacket<'a>> {
+    move |input: &[u8]| {
+        match ty {
+            PacketType::Connect => connect_packet(input),
+            PacketType::ConnAck => conn_ack_packet(input),
+            PacketType::Publish => publish_packet(input, flags),
+            PacketType::PubAck => packet_id_header(input, |id| MqttPacket::PubAck {packet_id: id}),
+            PacketType::PubRec => packet_id_header(input, |id| MqttPacket::PubRec {packet_id: id}),
+            PacketType::PubRel =>  packet_id_header(input, |id| MqttPacket::PubRel {packet_id: id}),
+            PacketType::PubComp =>  packet_id_header(input, |id| MqttPacket::PubComp {packet_id: id}),
+            PacketType::Subscribe => subscribe_packet(input),
+            PacketType::SubAck => sub_ack_packet(input),
+            PacketType::Unsubscribe => unsubscribe_packet(input),
+            PacketType::UnsubAck => packet_id_header(input, |id| MqttPacket::UnsubAck {packet_id: id}),
+            PacketType::PingReq => Ok((input, MqttPacket::PingReq)),
+            PacketType::PingResp => Ok((input, MqttPacket::PingResp)),
+            PacketType::Disconnect => Ok((input, MqttPacket::Disconnect))
+        }
+    }
+}
+
+fn packet_flags<'a>(ty: PacketType) -> impl Fn((&'a [u8], usize)) -> ParserResult<'a, (&'a [u8], usize), (PacketType, PacketFlags)> {
+    move |input: (&'a [u8], usize)| {
+        use self::PacketType::*;
+
+        let (rest, received) = take_bits(4usize)(input)?;
+
+        let expected: u8 = match ty {
+            Publish => received,
+            Subscribe | Unsubscribe => 0b0010,
+            _ => 0b0000
+        };
+
+        let res = if received == expected {
+            Ok(received)
+        } else {
+            Err(Error::UnexpectedPacketFlags{ expected, ty, received })
+        };
+        
+        res.and_then(|b| PacketFlags::try_from(b))
+            .map(|f| (rest, (ty, f)))
+            .map_err(|e| Err::Error(ParserError::some(e)))
+    }
+}
+
+pub(crate) fn packet<'a>(input: &'a [u8]) -> ParserResult<&'a [u8], MqttPacket<'a>> {
+    let (rest, (ty, flags)) = bits(flat_map(
+        map_res_err(
+            take_bits(4usize),
+            |b: u8| PacketType::try_from(b).map_err(|e| ParserError::some(e))
+        ),
+        packet_flags
+    ))(input)?;
+    map_parser(flat_map(vle, take), add_error(complete(packet_body(ty, flags)), || Error::IncompletePacket))(rest)
+}

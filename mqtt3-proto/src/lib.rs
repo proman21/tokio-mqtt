@@ -1,7 +1,7 @@
 #[macro_use] extern crate snafu;
 #[macro_use] extern crate derive_builder;
 #[macro_use] extern crate bitflags;
-#[macro_use] extern crate nom;
+extern crate nom;
 #[macro_use] extern crate enum_primitive;
 extern crate bytes;
 

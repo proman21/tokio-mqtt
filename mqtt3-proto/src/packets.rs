@@ -1,4 +1,6 @@
 use bytes::BufMut;
+use nom::Err;
+
 use parsers::*;
 use types::*;
 use errors::*;
@@ -21,14 +23,6 @@ fn encode_vle<B: BufMut>(num: usize, out: &mut B) -> Result<(), Error<'static>> 
         }
     }
     Ok(())
-}
-
-fn string_len_check(s: &str) -> Result<()> {
-    if s.len() > 65535 {
-        Err(Error::StringTooBig(s.len()))
-    } else {
-        Ok(())
-    }
 }
 
 impl<'a> MqttPacket<'a> {
