@@ -7,9 +7,9 @@ categories = ["encoding", "network-programming", "parser-implementations"]
 keywords = ["mqtt", "mqtt-v3.1.1"]
 
 [dependencies]
-bitflags = "1.0"
+bitflags = "1.1"
 bytes = "0.4.12"
-nom = "4.2.3"
+nom = "5.0.0-beta1"
 enum_primitive = "0.1.1"
 failure = "0.1.5"
 failure_derive = "0.1.5"
