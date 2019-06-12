@@ -61,15 +61,14 @@ impl<'a> MqttPacket<'a> {
         use ::MqttPacket::*;
 
         match self {
-            Connect { .. } | ConnAck { .. } | PubAck{ .. } | PubRec{ .. } | PubRel{ .. } | PubComp{ .. } | 
-                SubAck { .. } | UnsubAck { .. } | PingReq | PingResp | Disconnect => PacketFlags::empty(),
             Publish { dup, qos, retain, ..} => {
                 let mut flags = PacketFlags::from(*qos);
                 flags.set(PacketFlags::DUP, *dup);
                 flags.set(PacketFlags::RET, *retain);
                 flags
             },
-            Subscribe{ .. } | Unsubscribe {.. } => PacketFlags::QOS1
+            Subscribe{ .. } | Unsubscribe {.. } => PacketFlags::QOS1,
+            _ => PacketFlags::empty()
         }
     }
 
@@ -112,8 +111,7 @@ impl<'a> MqttPacket<'a> {
         encode_vle(self.encoded_length(), out)?;
         match self {
             Connect{ protocol_level, clean_session, keep_alive, client_id, lwt, credentials } => {
-                out.put_u16_be(4);
-                out.put_slice(b"MQTT");
+                MqttString::new_unchecked("MQTT").encode(out);
         
                 out.put_u8(*protocol_level as u8);
                 
@@ -136,11 +134,17 @@ impl<'a> MqttPacket<'a> {
                     c.encode(out);
                 }
             },
-            ConnAck{ session_present, connect_return_code } => {
-                let mut flags = ConnAckFlags::empty();
-                flags.set(ConnAckFlags::SP, *session_present);
-                out.put_u8(flags.bits());
-                out.put_u8(*connect_return_code as u8);
+            ConnAck{ result } => {
+                match result {
+                    Ok(flags) => {
+                        out.put_u8(flags.bits());
+                        out.put_u8(0);
+                    },
+                    Err(e) => {
+                        out.put_u8(ConnAckFlags::empty().bits());
+                        out.put_u8(*e as u8);
+                    }
+                }
             },
             Publish {topic_name, packet_id, message, ..} => {
                  topic_name.encode(out);
@@ -179,16 +183,23 @@ impl<'a> MqttPacket<'a> {
                 10 + client_id.encoded_length() + lwt.as_ref().map_or(0, |l| l.encoded_length()) +
                 credentials.as_ref().map_or(0, |c| c.encoded_length())
             },
-            ConnAck{ .. } | PubAck{..} | PubRec{..} | PubRel{..} | PubComp{..} | UnsubAck {..} => 2,
+            ConnAck{ .. } |
+            PubAck{..} |
+            PubRec{..} |
+            PubRel{..} |
+            PubComp{..} |
+            UnsubAck {..} => 2,
             Publish{topic_name, message, packet_id, ..} => {
                 topic_name.encoded_length() + packet_id.and(Some(2)).unwrap_or(0) + message.encoded_length()
             },
             Subscribe{ subscriptions, .. } => {
                 2 + subscriptions.encoded_length()
             },
-            SubAck{ return_codes, ..} => 2 + results.encoded_length(),
+            SubAck{ results, ..} => 2 + results.encoded_length(),
             Unsubscribe{ topics, ..} => 2 + topics.encoded_length(),
-            PingReq | PingResp | Disconnect => 0
+            PingReq |
+            PingResp |
+            Disconnect => 0
         }
     }
     
@@ -213,7 +224,7 @@ impl<'a> MqttPacket<'a> {
         use self::MqttPacket::*;
         
         match self {
-            Publish{topic_name, packet_id, qos, dup, ..} => {
+            Publish{ packet_id, qos, dup, ..} => {
                 match qos {
                     QualityOfService::QoS0 => {
                         ensure!(!*dup, InvalidDupFlag);

@@ -21,32 +21,31 @@ pub enum MqttPacket<'a> {
         protocol_level: ProtoLvl,
         clean_session: bool,
         keep_alive: u16,
-        client_id: &'a str,
-        lwt: Option<LWTMessage<&'a str, &'a [u8]>>,
-        credentials: Option<Credentials<&'a str, &'a [u8]>>
+        client_id: MqttString<'a>,
+        lwt: Option<LWTMessage<'a, &'a [u8]>>,
+        credentials: Option<Credentials<'a, &'a [u8]>>
     },
     ConnAck {
-        session_present: bool,
-        connect_return_code: ConnRetCode,
+        result: Result<ConnAckFlags, ConnectError>
     },
     Publish {
         dup: bool,
         qos: QualityOfService,
         retain: bool,
-        topic_name: &'a str,
+        topic_name: MqttString<'a>,
         packet_id: Option<u16>,
         message: &'a [u8]
     },
     PubAck {
         packet_id: u16
     },
-    PubRec{
+    PubRec {
         packet_id: u16
     },
-    PubRel{
+    PubRel {
         packet_id: u16
     },
-    PubComp{
+    PubComp {
         packet_id: u16
     },
     Subscribe {
@@ -59,7 +58,7 @@ pub enum MqttPacket<'a> {
     },
     Unsubscribe {
         packet_id: u16,
-        topics: Vec<&'a str>
+        topics: Vec<MqttString<'a>>
     },
     UnsubAck {
         packet_id: u16

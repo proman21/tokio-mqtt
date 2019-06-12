@@ -133,7 +133,7 @@ impl TryFrom<u8> for ConnAckFlags {
 
 enum_from_primitive! {
     /// Types of packets in the MQTT Protocol.
-    #[derive(Clone, Copy, Debug)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum PacketType {
         Connect     = 1,
         ConnAck     = 2,
@@ -182,54 +182,38 @@ impl fmt::Display for PacketType {
     }
 }
 
-enum_from_primitive! {
-    #[derive(Clone, Copy, Debug, PartialEq)]
-    pub enum ConnRetCode {
-        Accepted          = 0,
-        BadProtoVersion   = 1,
-        ClientIdRejected  = 2,
-        ServerUnavailable = 3,
-        BadCredentials    = 4,
-        Unauthorized      = 5
-    }
+#[derive(Clone, Copy, PartialEq)]
+pub enum ConnectError {
+    BadProtoVersion   = 1,
+    ClientIdRejected  = 2,
+    ServerUnavailable = 3,
+    BadCredentials    = 4,
+    Unauthorized      = 5
 }
 
-impl ConnRetCode {
-    pub fn is_ok(&self) -> bool {
-        match self {
-            &ConnRetCode::Accepted => true,
-            _ => false
-        }
-    }
-
-    pub fn is_err(&self) -> bool {
-        !self.is_ok()
-    }
-}
-
-impl From<ConnRetCode> for u8 {
-    fn from(data: ConnRetCode) -> u8 {
-        match data {
-            ConnRetCode::Accepted          => 0,
-            ConnRetCode::BadProtoVersion   => 1,
-            ConnRetCode::ClientIdRejected  => 2,
-            ConnRetCode::ServerUnavailable => 3,
-            ConnRetCode::BadCredentials    => 4,
-            ConnRetCode::Unauthorized      => 5
-        }
-    }
-}
-
-impl fmt::Display for ConnRetCode {
+impl fmt::Display for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::ConnectError::*;
+
         match self {
-            &ConnRetCode::Accepted => write!(f, "{}", CRC_0_MESSAGE),
-            &ConnRetCode::BadProtoVersion => write!(f, "{}", CRC_1_MESSAGE),
-            &ConnRetCode::ClientIdRejected => write!(f, "{}", CRC_2_MESSAGE),
-            &ConnRetCode::ServerUnavailable => write!(f, "{}", CRC_3_MESSAGE),
-            &ConnRetCode::BadCredentials => write!(f, "{}", CRC_4_MESSAGE),
-            &ConnRetCode::Unauthorized => write!(f, "{}", CRC_5_MESSAGE)
+            BadProtoVersion => write!(f, "{}", CRC_1_MESSAGE),
+            ClientIdRejected => write!(f, "{}", CRC_2_MESSAGE),
+            ServerUnavailable => write!(f, "{}", CRC_3_MESSAGE),
+            BadCredentials => write!(f, "{}", CRC_4_MESSAGE),
+            Unauthorized => write!(f, "{}", CRC_5_MESSAGE)
         }
+    }
+}
+
+pub(crate) fn connect_result_from_u8(code: u8) -> Result<Result<(), ConnectError>, Error<'static>> {
+    match code {
+        0 => Ok(Ok(())),
+        1 => Ok(Err(ConnectError::BadProtoVersion)),
+        2 => Ok(Err(ConnectError::ClientIdRejected)),
+        3 => Ok(Err(ConnectError::ServerUnavailable)),
+        4 => Ok(Err(ConnectError::BadCredentials)),
+        5 => Ok(Err(ConnectError::Unauthorized)),
+        _ => Err(Error::InvalidConnectReturnCode{ code })
     }
 }
 
