@@ -4,12 +4,10 @@ use types::*;
 use errors::*;
 use super::MqttPacket;
 
-fn encode_vle<B: BufMut>(num: usize, out: &mut B) -> Result<()> {
+fn encode_vle<B: BufMut>(num: usize, out: &mut B) -> Result<(), Error<'static>> {
     let mut val: usize = num;
 
-    if num > 268_435_455 {
-        return Err(Error::PacketTooBig(num));
-    }
+    ensure!(num <= 268_435_455, PacketTooBig{ encoded_size: num });
 
     loop {
         let mut enc_byte: u8 = (val % 128) as u8;
@@ -84,18 +82,16 @@ impl<'a> MqttPacket<'a> {
     /// be returned.
     ///
     /// If an problem occurs while decoding the bytes, an error will be returned.
-    pub fn from_buf<B: AsRef<[u8]>>(buf: &'a B) -> Result<Option<(&'a [u8], MqttPacket<'a>)>> {
+    pub fn from_buf<B: AsRef<[u8]>>(buf: &'a B) -> Result<Option<(&'a [u8], MqttPacket<'a>)>, Error<'a>> {
         MqttPacket::from_slice(buf.as_ref())
     }
     
     // Non monomorphized code path for parsing to reduce library size.
-    fn from_slice(buf: &'a [u8]) -> Result<Option<(&'a [u8], MqttPacket<'a>)>> {
+    fn from_slice(buf: &'a [u8]) -> Result<Option<(&'a [u8], MqttPacket<'a>)>, Error<'a>> {
         match packet(buf) {
             Ok(t) => Ok(Some(t)),
             Err(Err::Incomplete(_)) => Ok(None),
-            Err(e) => {
-                
-            }
+            Err(Err::Error(e)) | Err(Err::Failure(e)) => Err(e.into_inner().unwrap())
         }
     }
     
@@ -106,7 +102,7 @@ impl<'a> MqttPacket<'a> {
     /// # Panics
     /// Panics if `out` does not have enough capacity to contain the packet. Use `len()` to determine the size of the
     /// encoded packet.
-    pub fn encode<B: BufMut>(&self, out: &mut B) -> Result<()> {
+    pub fn encode<B: BufMut>(&self, out: &mut B) -> Result<(), Error<'a>> {
         use self::MqttPacket::*;
         
         self.validate()?;
@@ -211,53 +207,33 @@ impl<'a> MqttPacket<'a> {
     
     /// Validates that the packet is correct according to the MQTT protocol rules.
     ///
-    /// This function checks string lengths, as well as the Quality of Service rules for the Publish packet.
-    pub fn validate(&self) -> Result<()> {
-         use self::MqttPacket::*;
-         
-         match self {
-             Connect{ client_id, lwt, credentials, .. } => {
-                 string_len_check(client_id)?;
-                 
-                 if let Some(l) = lwt {
-                      string_len_check(l.topic)?;
-                 }
-                 
-                 if let Some(c) = credentials {
-                      string_len_check(c.username)?;
-                 }
-             },
-             ConnAck{session_present, connect_return_code} => {
-                 if session_present & connect_return_code.is_err() {
-                     return Err(Error::UnexpectedSessionPresent);
-                 }
-             }
-             Publish{topic_name, packet_id, qos, dup, ..} => {
-                string_len_check(topic_name)?;
-                
+    /// This function checks the Quality of Service rules for the Publish packet, and that Subscribe, Unsubscribe,
+    /// and SubAck payloads are not empty.
+    pub fn validate(&self) -> Result<(), Error<'a>> {
+        use self::MqttPacket::*;
+        
+        match self {
+            Publish{topic_name, packet_id, qos, dup, ..} => {
                 match qos {
                     QualityOfService::QoS0 => {
-                        if *dup {
-                            return Err(Error::InvalidDupFlag);
-                        }
-                        
-                        if packet_id.is_some() {
-                            return Err(Error::UnexpectedPublishPacketId)
-                        }
+                        ensure!(!*dup, InvalidDupFlag);
+                        ensure!(packet_id.is_none(), UnexpectedPublishPacketId);
                     },
-                    QualityOfService::QoS1 | QualityOfService::QoS2 => {
-                        if packet_id.is_none() {
-                            return Err(Error::MissingPublishPacketId)
-                        }
+                    _ => {
+                        ensure!(packet_id.is_some(), MissingPublishPacketId);
                     }
                 }
-             },
-             Unsubscribe{ topics, ..} => {
-                 for t in topics {
-                      string_len_check(t)?;
-                 }
-             },
-             _ => {}
+            },
+            Unsubscribe{ topics, ..} => {
+                ensure!(!topics.is_empty(), MissingPayload);
+            },
+            Subscribe{ subscriptions, .. } => {
+                ensure!(!subscriptions.is_empty(), MissingPayload);
+            },
+            SubAck{ results, .. } => {
+                ensure!(!results.is_empty(), MissingPayload);
+            },
+            _ => {}
          }
          
          Ok(())

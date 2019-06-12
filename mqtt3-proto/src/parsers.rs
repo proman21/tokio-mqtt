@@ -107,7 +107,7 @@ mod vle_tests {
     #[test]
     fn overflow_vle() {
         let input = [0x80, 0x80, 0x80, 0x80, 0x01];
-        assert_eq!(vle(&input), Err(Err::Error(error_position!(&input[3..], ErrorKind::Custom(666)))));
+        assert_eq!(vle(&input), Err(Err::Failure(ParserError::some(Error::VleOverflow))));
     }
 
     #[test]

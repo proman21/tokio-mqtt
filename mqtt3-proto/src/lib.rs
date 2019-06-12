@@ -1,5 +1,4 @@
-extern crate failure;
-extern crate failure_derive;
+#[macro_use] extern crate snafu;
 #[macro_use] extern crate derive_builder;
 #[macro_use] extern crate bitflags;
 #[macro_use] extern crate nom;

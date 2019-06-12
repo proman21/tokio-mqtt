@@ -41,6 +41,14 @@ impl PacketFlags {
     }
 }
 
+impl TryFrom<u8> for PacketFlags {
+    type Error = Error<'static>;
+
+    fn try_from(value: u8) -> Result<PacketFlags, Error<'static>> {
+        PacketFlags::from_bits(value).ok_or(Error::InvalidPacketFlag{ flags: value })
+    }
+}
+
 impl From<QualityOfService> for PacketFlags {
     fn from(value: QualityOfService) -> PacketFlags {
         match value {
@@ -85,6 +93,14 @@ impl ConnFlags {
     }
 }
 
+impl TryFrom<u8> for ConnFlags {
+    type Error = Error<'static>;
+
+    fn try_from(value: u8) -> Result<ConnFlags, Error<'static>> {
+        ConnFlags::from_bits(value).ok_or(Error::InvalidConnectFlags{ flags: value})
+    }
+}
+
 impl From<QualityOfService> for ConnFlags {
     fn from(value: QualityOfService) -> ConnFlags {
         match value {
@@ -104,6 +120,14 @@ bitflags! {
 impl ConnAckFlags {
     pub fn is_clean(&self) -> bool {
         self.intersects(Self::SP)
+    }
+}
+
+impl TryFrom<u8> for ConnAckFlags {
+    type Error = Error<'static>;
+
+    fn try_from(value: u8) -> Result<ConnAckFlags, Error<'static>> {
+        ConnAckFlags::from_bits(value).ok_or(Error::InvalidConnAckFlags{ flags: value })
     }
 }
 
@@ -129,10 +153,10 @@ enum_from_primitive! {
 }
 
 impl TryFrom<u8> for PacketType {
-    type Error = Error;
+    type Error = Error<'static>;
     
-    fn try_from(value: u8) -> Result<PacketType> {
-        PacketType::from_u8(value).ok_or(Error::UnknownPacketType(value))
+    fn try_from(value: u8) -> Result<PacketType, Error<'static>> {
+        PacketType::from_u8(value).ok_or(Error::UnknownPacketType{ ty: value })
     }
 }
 
@@ -219,10 +243,10 @@ enum_from_primitive! {
 }
 
 impl TryFrom<u8> for ProtoLvl {
-    type Error = Error;
+    type Error = Error<'static>;
     
-    fn try_from(value: u8) -> Result<ProtoLvl> {
-        ProtoLvl::from_bits(value).ok_or(Error::InvalidProtocol(value))
+    fn try_from(value: u8) -> Result<ProtoLvl, Error<'static>> {
+        ProtoLvl::from_u8(value).ok_or(Error::InvalidProtocol{ level: value })
     }
 }
 
@@ -242,6 +266,14 @@ enum_from_primitive! {
         /// The client and server will both ensure the message is received by requiring a two-step acknowledgement that
         /// prevents loss or duplication.
         QoS2 = 2
+    }
+}
+
+impl TryFrom<u8> for QualityOfService {
+    type Error = Error<'static>;
+
+    fn try_from(value: u8) -> Result<QualityOfService, Error<'static>> {
+        QualityOfService::from_u8(value).ok_or(Error::InvalidQos{ qos: value})
     }
 }
 
