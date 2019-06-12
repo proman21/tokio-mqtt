@@ -4,18 +4,14 @@ extern crate failure_derive;
 #[macro_use] extern crate bitflags;
 #[macro_use] extern crate nom;
 #[macro_use] extern crate enum_primitive;
-#[macro_use] extern crate lazy_static;
-extern crate regex;
 extern crate bytes;
 
 pub mod types;
 mod parsers;
-pub mod topic_filter;
 pub mod errors;
 mod packets;
 
 pub use types::*;
-pub use topic_filter::*;
 
 /// A enumeration of possible control packets used in the MQTT Protocol.
 ///

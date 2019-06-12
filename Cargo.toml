@@ -14,10 +14,11 @@ serde = "0.9.13"
 serde_derive = "0.9.13"
 bincode = "0.7.0"
 touch = "0"
-lazy_static = "0.2"
+lazy_static = "1.3.0"
 slog = "2.1.1"
 slog-stdlog = "3.0.2"
 derive_builder = "0.5.1"
 mqtt3-proto = { path = "mqtt3-proto" }
+regex = "1.1"
 
 [workspace]

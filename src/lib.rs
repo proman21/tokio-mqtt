@@ -14,10 +14,12 @@ extern crate bincode;
 #[macro_use] extern crate slog;
 extern crate slog_stdlog;
 #[macro_use] extern crate derive_builder;
-extern crate mqtt3_proto
+extern crate regex;
+extern crate mqtt3_proto;
 
 mod errors;
 mod types;
 mod client;
 mod persistence;
 mod backend;
+mod topic_filter;
