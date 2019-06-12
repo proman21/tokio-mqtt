@@ -1,14 +1,18 @@
-#[macro_use] extern crate snafu;
-#[macro_use] extern crate derive_builder;
-#[macro_use] extern crate bitflags;
+#[macro_use]
+extern crate snafu;
+#[macro_use]
+extern crate derive_builder;
+#[macro_use]
+extern crate bitflags;
 extern crate nom;
-#[macro_use] extern crate enum_primitive;
+#[macro_use]
+extern crate enum_primitive;
 extern crate bytes;
 
-pub mod types;
-mod parsers;
 pub mod errors;
 mod packets;
+mod parsers;
+pub mod types;
 
 pub use types::*;
 
@@ -23,10 +27,10 @@ pub enum MqttPacket<'a> {
         keep_alive: u16,
         client_id: MqttString<'a>,
         lwt: Option<LWTMessage<'a, &'a [u8]>>,
-        credentials: Option<Credentials<'a, &'a [u8]>>
+        credentials: Option<Credentials<'a, &'a [u8]>>,
     },
     ConnAck {
-        result: Result<ConnAckFlags, ConnectError>
+        result: Result<ConnAckFlags, ConnectError>,
     },
     Publish {
         dup: bool,
@@ -34,36 +38,36 @@ pub enum MqttPacket<'a> {
         retain: bool,
         topic_name: MqttString<'a>,
         packet_id: Option<u16>,
-        message: &'a [u8]
+        message: &'a [u8],
     },
     PubAck {
-        packet_id: u16
+        packet_id: u16,
     },
     PubRec {
-        packet_id: u16
+        packet_id: u16,
     },
     PubRel {
-        packet_id: u16
+        packet_id: u16,
     },
     PubComp {
-        packet_id: u16
+        packet_id: u16,
     },
     Subscribe {
         packet_id: u16,
-        subscriptions: Vec<SubscriptionTuple<'a>>
+        subscriptions: Vec<SubscriptionTuple<'a>>,
     },
     SubAck {
         packet_id: u16,
-        results: Vec<Option<QualityOfService>>
+        results: Vec<Option<QualityOfService>>,
     },
     Unsubscribe {
         packet_id: u16,
-        topics: Vec<MqttString<'a>>
+        topics: Vec<MqttString<'a>>,
     },
     UnsubAck {
-        packet_id: u16
+        packet_id: u16,
     },
     PingReq,
     PingResp,
-    Disconnect
+    Disconnect,
 }

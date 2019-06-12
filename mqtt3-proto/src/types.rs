@@ -1,7 +1,8 @@
-use std::fmt;
-use std::convert::{TryFrom, From, AsRef};
-use bytes::{BufMut};
+use bytes::BufMut;
+use enum_primitive::FromPrimitive;
 use errors::*;
+use std::convert::{AsRef, From, TryFrom};
+use std::fmt;
 
 static CRC_0_MESSAGE: &'static str = "0x00 Connection Accepted";
 static CRC_1_MESSAGE: &'static str = "0x01 Connection Refused, unacceptable protocol version";
@@ -45,7 +46,7 @@ impl TryFrom<u8> for PacketFlags {
     type Error = Error<'static>;
 
     fn try_from(value: u8) -> Result<PacketFlags, Error<'static>> {
-        PacketFlags::from_bits(value).ok_or(Error::InvalidPacketFlag{ flags: value })
+        PacketFlags::from_bits(value).ok_or(Error::InvalidPacketFlag { flags: value })
     }
 }
 
@@ -54,7 +55,7 @@ impl From<QualityOfService> for PacketFlags {
         match value {
             QualityOfService::QoS0 => PacketFlags::empty(),
             QualityOfService::QoS1 => PacketFlags::QOS1,
-            QualityOfService::QoS2 => PacketFlags::QOS2
+            QualityOfService::QoS2 => PacketFlags::QOS2,
         }
     }
 }
@@ -75,19 +76,19 @@ impl ConnFlags {
     pub fn is_clean(&self) -> bool {
         self.intersects(ConnFlags::CLEAN_SESS)
     }
-    
+
     pub fn has_username(&self) -> bool {
         self.intersects(ConnFlags::USERNAME)
     }
-    
+
     pub fn has_password(&self) -> bool {
         self.intersects(ConnFlags::PASSWORD)
     }
-    
+
     pub fn lwt_retain(&self) -> bool {
         self.intersects(ConnFlags::WILL_RETAIN)
     }
-    
+
     pub fn has_lwt(&self) -> bool {
         self.intersects(ConnFlags::WILL_FLAG)
     }
@@ -97,7 +98,7 @@ impl TryFrom<u8> for ConnFlags {
     type Error = Error<'static>;
 
     fn try_from(value: u8) -> Result<ConnFlags, Error<'static>> {
-        ConnFlags::from_bits(value).ok_or(Error::InvalidConnectFlags{ flags: value})
+        ConnFlags::from_bits(value).ok_or(Error::InvalidConnectFlags { flags: value })
     }
 }
 
@@ -106,13 +107,13 @@ impl From<QualityOfService> for ConnFlags {
         match value {
             QualityOfService::QoS0 => ConnFlags::empty(),
             QualityOfService::QoS1 => ConnFlags::WILL_QOS1,
-            QualityOfService::QoS2 => ConnFlags::WILL_QOS2
+            QualityOfService::QoS2 => ConnFlags::WILL_QOS2,
         }
     }
 }
 
 bitflags! {
-    pub(crate) struct ConnAckFlags: u8 {
+    pub struct ConnAckFlags: u8 {
         const SP = 0b0001;
     }
 }
@@ -127,7 +128,7 @@ impl TryFrom<u8> for ConnAckFlags {
     type Error = Error<'static>;
 
     fn try_from(value: u8) -> Result<ConnAckFlags, Error<'static>> {
-        ConnAckFlags::from_bits(value).ok_or(Error::InvalidConnAckFlags{ flags: value })
+        ConnAckFlags::from_bits(value).ok_or(Error::InvalidConnAckFlags { flags: value })
     }
 }
 
@@ -154,9 +155,9 @@ enum_from_primitive! {
 
 impl TryFrom<u8> for PacketType {
     type Error = Error<'static>;
-    
+
     fn try_from(value: u8) -> Result<PacketType, Error<'static>> {
-        PacketType::from_u8(value).ok_or(Error::UnknownPacketType{ ty: value })
+        PacketType::from_u8(value).ok_or(Error::UnknownPacketType { ty: value })
     }
 }
 
@@ -177,18 +178,18 @@ impl fmt::Display for PacketType {
             UnsubAck => write!(f, "UNSUBACK"),
             PingReq => write!(f, "PINGREQ"),
             PingResp => write!(f, "PINGRESP"),
-            Disconnect => write!(f, "DISCONNECT") 
+            Disconnect => write!(f, "DISCONNECT"),
         }
     }
 }
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ConnectError {
-    BadProtoVersion   = 1,
-    ClientIdRejected  = 2,
+    BadProtoVersion = 1,
+    ClientIdRejected = 2,
     ServerUnavailable = 3,
-    BadCredentials    = 4,
-    Unauthorized      = 5
+    BadCredentials = 4,
+    Unauthorized = 5,
 }
 
 impl fmt::Display for ConnectError {
@@ -200,7 +201,7 @@ impl fmt::Display for ConnectError {
             ClientIdRejected => write!(f, "{}", CRC_2_MESSAGE),
             ServerUnavailable => write!(f, "{}", CRC_3_MESSAGE),
             BadCredentials => write!(f, "{}", CRC_4_MESSAGE),
-            Unauthorized => write!(f, "{}", CRC_5_MESSAGE)
+            Unauthorized => write!(f, "{}", CRC_5_MESSAGE),
         }
     }
 }
@@ -213,7 +214,7 @@ pub(crate) fn connect_result_from_u8(code: u8) -> Result<Result<(), ConnectError
         3 => Ok(Err(ConnectError::ServerUnavailable)),
         4 => Ok(Err(ConnectError::BadCredentials)),
         5 => Ok(Err(ConnectError::Unauthorized)),
-        _ => Err(Error::InvalidConnectReturnCode{ code })
+        _ => Err(Error::InvalidConnectReturnCode { code }),
     }
 }
 
@@ -228,9 +229,9 @@ enum_from_primitive! {
 
 impl TryFrom<u8> for ProtoLvl {
     type Error = Error<'static>;
-    
+
     fn try_from(value: u8) -> Result<ProtoLvl, Error<'static>> {
-        ProtoLvl::from_u8(value).ok_or(Error::InvalidProtocol{ level: value })
+        ProtoLvl::from_u8(value).ok_or(Error::InvalidProtocol { level: value })
     }
 }
 
@@ -257,7 +258,7 @@ impl TryFrom<u8> for QualityOfService {
     type Error = Error<'static>;
 
     fn try_from(value: u8) -> Result<QualityOfService, Error<'static>> {
-        QualityOfService::from_u8(value).ok_or(Error::InvalidQos{ qos: value})
+        QualityOfService::from_u8(value).ok_or(Error::InvalidQos { qos: value })
     }
 }
 
@@ -278,17 +279,19 @@ impl fmt::Display for QualityOfService {
         match self {
             &QualityOfService::QoS0 => write!(f, "QOS0"),
             &QualityOfService::QoS1 => write!(f, "QOS1"),
-            &QualityOfService::QoS2 => write!(f, "QOS2")
+            &QualityOfService::QoS2 => write!(f, "QOS2"),
         }
     }
 }
 
 impl Encodable for QualityOfService {
     fn encode<B: BufMut>(&self, out: &mut B) {
-            out.put_u8(*self as u8)
+        out.put_u8(*self as u8)
     }
 
-    fn encoded_length(&self) -> usize { 1 }
+    fn encoded_length(&self) -> usize {
+        1
+    }
 }
 
 impl Encodable for Option<QualityOfService> {
@@ -297,12 +300,14 @@ impl Encodable for Option<QualityOfService> {
             Some(QualityOfService::QoS0) => 0,
             Some(QualityOfService::QoS1) => 1,
             Some(QualityOfService::QoS2) => 2,
-            None => 128
+            None => 128,
         };
         out.put_u8(code);
     }
 
-    fn encoded_length(&self) -> usize { 1 }
+    fn encoded_length(&self) -> usize {
+        1
+    }
 }
 
 pub(crate) trait Encodable {
@@ -318,7 +323,7 @@ impl<T: Encodable> Encodable for Vec<T> {
             item.encode(out);
         }
     }
-    
+
     fn encoded_length(&self) -> usize {
         self.into_iter().fold(0, |acc, t| acc + t.encoded_length())
     }
@@ -344,8 +349,8 @@ pub struct MqttString<'a>(&'a str);
 impl<'a> MqttString<'a> {
     /// Create a new MqttString using `s`. Will return an error if the string requirements aren't met.
     pub fn new(s: &'a str) -> Result<MqttString<'a>, Error<'a>> {
-        ensure!(s.len() <= 65535, StringTooBig{ string: s });
-        ensure!(!s.contains('\0'), InvalidString{ string: s });
+        ensure!(s.len() <= 65535, StringTooBig { string: s });
+        ensure!(!s.contains('\0'), InvalidString { string: s });
 
         Ok(MqttString(s))
     }
@@ -387,14 +392,14 @@ impl<'a> Encodable for SubscriptionTuple<'a> {
         self.0.encode(out);
         self.1.encode(out);
     }
-    
+
     fn encoded_length(&self) -> usize {
         self.0.encoded_length() + self.1.encoded_length()
     }
-} 
+}
 
 /// A Last Will and Testament message.
-/// 
+///
 /// This type holds the Last Will and Testament message sent to the server upon connection.
 /// If the client unexpectedly disconnects, this message will be sent by the server.
 #[derive(Builder, Clone)]
@@ -405,7 +410,7 @@ pub struct LWTMessage<'a, P: AsRef<[u8]>> {
     #[builder(default = "false")]
     pub retain: bool,
     #[builder(default = [])]
-    pub message: P
+    pub message: P,
 }
 
 impl<'a, P: AsRef<[u8]>> LWTMessage<'a, P> {
@@ -414,7 +419,7 @@ impl<'a, P: AsRef<[u8]>> LWTMessage<'a, P> {
             topic: t,
             qos: flags.into(),
             retain: flags.intersects(ConnFlags::WILL_RETAIN),
-            message: m
+            message: m,
         }
     }
 
@@ -424,7 +429,7 @@ impl<'a, P: AsRef<[u8]>> LWTMessage<'a, P> {
             topic: self.topic.clone(),
             qos: self.qos,
             retain: self.retain,
-            message: self.message.as_ref()
+            message: self.message.as_ref(),
         }
     }
 
@@ -440,7 +445,7 @@ impl<'a> Encodable for LWTMessage<'a, &[u8]> {
         self.topic.encode(out);
         self.message.encode(out);
     }
-    
+
     fn encoded_length(&self) -> usize {
         self.topic.encoded_length() + self.message.encoded_length()
     }
@@ -449,7 +454,7 @@ impl<'a> Encodable for LWTMessage<'a, &[u8]> {
 /// Container for MQTT credentials, which is a username and optional password.
 pub struct Credentials<'a, P: AsRef<[u8]>> {
     pub username: MqttString<'a>,
-    pub password: Option<P>
+    pub password: Option<P>,
 }
 
 impl<'a, P: AsRef<[u8]>> Credentials<'a, P> {
@@ -457,7 +462,7 @@ impl<'a, P: AsRef<[u8]>> Credentials<'a, P> {
     pub fn as_ref(&self) -> Credentials<'a, &[u8]> {
         Credentials {
             username: self.username.clone(),
-            password: self.password.as_ref().map(|p| p.as_ref())
+            password: self.password.as_ref().map(|p| p.as_ref()),
         }
     }
 }

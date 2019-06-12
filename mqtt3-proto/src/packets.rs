@@ -1,15 +1,15 @@
 use bytes::BufMut;
 use nom::Err;
 
+use super::MqttPacket;
+use errors::*;
 use parsers::*;
 use types::*;
-use errors::*;
-use super::MqttPacket;
 
 fn encode_vle<B: BufMut>(num: usize, out: &mut B) -> Result<(), Error<'static>> {
     let mut val: usize = num;
 
-    ensure!(num <= 268_435_455, PacketTooBig{ encoded_size: num });
+    ensure!(num <= 268_435_455, PacketTooBig { encoded_size: num });
 
     loop {
         let mut enc_byte: u8 = (val % 128) as u8;
@@ -34,35 +34,37 @@ impl<'a> MqttPacket<'a> {
         use self::MqttPacket::*;
 
         match self {
-            Connect {.. } => PacketType::Connect,
+            Connect { .. } => PacketType::Connect,
             ConnAck { .. } => PacketType::ConnAck,
             Publish { .. } => PacketType::Publish,
-            PubAck{ .. } => PacketType::PubAck,
-            PubRec{ .. } => PacketType::PubRec,
-            PubRel{ .. } => PacketType::PubRel,
-            PubComp{ .. } => PacketType::PubComp,
-            Subscribe{ .. } => PacketType::Subscribe,
+            PubAck { .. } => PacketType::PubAck,
+            PubRec { .. } => PacketType::PubRec,
+            PubRel { .. } => PacketType::PubRel,
+            PubComp { .. } => PacketType::PubComp,
+            Subscribe { .. } => PacketType::Subscribe,
             SubAck { .. } => PacketType::SubAck,
             Unsubscribe { .. } => PacketType::Unsubscribe,
             UnsubAck { .. } => PacketType::UnsubAck,
             PingReq => PacketType::PingReq,
             PingResp => PacketType::PingResp,
-            Disconnect => PacketType::Disconnect
+            Disconnect => PacketType::Disconnect,
         }
     }
-    
+
     fn packet_flags(&self) -> PacketFlags {
-        use ::MqttPacket::*;
+        use MqttPacket::*;
 
         match self {
-            Publish { dup, qos, retain, ..} => {
+            Publish {
+                dup, qos, retain, ..
+            } => {
                 let mut flags = PacketFlags::from(*qos);
                 flags.set(PacketFlags::DUP, *dup);
                 flags.set(PacketFlags::RET, *retain);
                 flags
-            },
-            Subscribe{ .. } | Unsubscribe {.. } => PacketFlags::QOS1,
-            _ => PacketFlags::empty()
+            }
+            Subscribe { .. } | Unsubscribe { .. } => PacketFlags::QOS1,
+            _ => PacketFlags::empty(),
         }
     }
 
@@ -75,21 +77,23 @@ impl<'a> MqttPacket<'a> {
     /// be returned.
     ///
     /// If an problem occurs while decoding the bytes, an error will be returned.
-    pub fn from_buf<B: AsRef<[u8]>>(buf: &'a B) -> Result<Option<(&'a [u8], MqttPacket<'a>)>, Error<'a>> {
+    pub fn from_buf<B: AsRef<[u8]>>(
+        buf: &'a B,
+    ) -> Result<Option<(&'a [u8], MqttPacket<'a>)>, Error<'a>> {
         MqttPacket::from_slice(buf.as_ref())
     }
-    
+
     // Non monomorphized code path for parsing to reduce library size.
     fn from_slice(buf: &'a [u8]) -> Result<Option<(&'a [u8], MqttPacket<'a>)>, Error<'a>> {
         match packet(buf) {
             Ok(t) => Ok(Some(t)),
             Err(Err::Incomplete(_)) => Ok(None),
-            Err(Err::Error(e)) | Err(Err::Failure(e)) => Err(e.into_inner().unwrap())
+            Err(Err::Error(e)) | Err(Err::Failure(e)) => Err(e.into_inner().unwrap()),
         }
     }
-    
+
     /// Attempt to encode the packet into a buffer.
-    /// 
+    ///
     /// If the packet is invalid or is too big to be encoded, an error will be raised.
     ///
     /// # Panics
@@ -97,106 +101,133 @@ impl<'a> MqttPacket<'a> {
     /// encoded packet.
     pub fn encode<B: BufMut>(&self, out: &mut B) -> Result<(), Error<'a>> {
         use self::MqttPacket::*;
-        
+
         self.validate()?;
-        
+
         out.put_u8(((self.packet_type() as u8) << 4) + self.packet_flags().bits());
 
         encode_vle(self.encoded_length(), out)?;
         match self {
-            Connect{ protocol_level, clean_session, keep_alive, client_id, lwt, credentials } => {
+            Connect {
+                protocol_level,
+                clean_session,
+                keep_alive,
+                client_id,
+                lwt,
+                credentials,
+            } => {
                 MqttString::new_unchecked("MQTT").encode(out);
-        
+
                 out.put_u8(*protocol_level as u8);
-                
-                let mut flags = lwt.as_ref().map_or(ConnFlags::empty(), |f| f.connect_flags());
+
+                let mut flags = lwt
+                    .as_ref()
+                    .map_or(ConnFlags::empty(), |f| f.connect_flags());
                 flags.set(ConnFlags::CLEAN_SESS, *clean_session);
                 if let Some(c) = credentials {
                     flags.insert(ConnFlags::USERNAME);
                     flags.set(ConnFlags::PASSWORD, c.password.is_some());
                 }
                 out.put_u8(flags.bits());
-        
+
                 out.put_u16_be(*keep_alive);
-                
+
                 client_id.encode(out);
                 if let Some(lwt) = lwt {
                     lwt.encode(out)
                 }
-                
+
                 if let Some(c) = credentials {
                     c.encode(out);
                 }
-            },
-            ConnAck{ result } => {
-                match result {
-                    Ok(flags) => {
-                        out.put_u8(flags.bits());
-                        out.put_u8(0);
-                    },
-                    Err(e) => {
-                        out.put_u8(ConnAckFlags::empty().bits());
-                        out.put_u8(*e as u8);
-                    }
+            }
+            ConnAck { result } => match result {
+                Ok(flags) => {
+                    out.put_u8(flags.bits());
+                    out.put_u8(0);
+                }
+                Err(e) => {
+                    out.put_u8(ConnAckFlags::empty().bits());
+                    out.put_u8(*e as u8);
                 }
             },
-            Publish {topic_name, packet_id, message, ..} => {
-                 topic_name.encode(out);
-                 if let Some(id) = packet_id {
-                     out.put_u16_be(*id);
-                 }
-                 out.put_slice(message);
-            },
-            PubAck{ packet_id } | PubRec{ packet_id } | PubRel{ packet_id } | PubComp{ packet_id } |
-                UnsubAck { packet_id} => {
+            Publish {
+                topic_name,
+                packet_id,
+                message,
+                ..
+            } => {
+                topic_name.encode(out);
+                if let Some(id) = packet_id {
+                    out.put_u16_be(*id);
+                }
+                out.put_slice(message);
+            }
+            PubAck { packet_id }
+            | PubRec { packet_id }
+            | PubRel { packet_id }
+            | PubComp { packet_id }
+            | UnsubAck { packet_id } => {
                 out.put_u16_be(*packet_id);
-            },
-            Subscribe{ packet_id, subscriptions } => {
+            }
+            Subscribe {
+                packet_id,
+                subscriptions,
+            } => {
                 out.put_u16_be(*packet_id);
                 subscriptions.encode(out);
-            },
-            SubAck{ packet_id, results } => {
+            }
+            SubAck { packet_id, results } => {
                 out.put_u16_be(*packet_id);
                 results.encode(out);
-            },
-            Unsubscribe{ packet_id, topics } => {
+            }
+            Unsubscribe { packet_id, topics } => {
                 out.put_u16_be(*packet_id);
                 topics.encode(out);
-            },
+            }
             PingReq | PingResp | Disconnect => {}
         }
 
         Ok(())
     }
-    
+
     fn encoded_length(&self) -> usize {
         use self::MqttPacket::*;
-        
+
         match self {
-            Connect{ client_id, lwt, credentials, .. } => {
-                10 + client_id.encoded_length() + lwt.as_ref().map_or(0, |l| l.encoded_length()) +
-                credentials.as_ref().map_or(0, |c| c.encoded_length())
-            },
-            ConnAck{ .. } |
-            PubAck{..} |
-            PubRec{..} |
-            PubRel{..} |
-            PubComp{..} |
-            UnsubAck {..} => 2,
-            Publish{topic_name, message, packet_id, ..} => {
-                topic_name.encoded_length() + packet_id.and(Some(2)).unwrap_or(0) + message.encoded_length()
-            },
-            Subscribe{ subscriptions, .. } => {
-                2 + subscriptions.encoded_length()
-            },
-            SubAck{ results, ..} => 2 + results.encoded_length(),
-            Unsubscribe{ topics, ..} => 2 + topics.encoded_length(),
-            PingReq |
-            PingResp |
-            Disconnect => 0
+            Connect {
+                client_id,
+                lwt,
+                credentials,
+                ..
+            } => {
+                10 + client_id.encoded_length()
+                    + lwt.as_ref().map_or(0, |l| l.encoded_length())
+                    + credentials.as_ref().map_or(0, |c| c.encoded_length())
+            }
+            ConnAck { .. }
+            | PubAck { .. }
+            | PubRec { .. }
+            | PubRel { .. }
+            | PubComp { .. }
+            | UnsubAck { .. } => 2,
+            Publish {
+                topic_name,
+                message,
+                packet_id,
+                ..
+            } => {
+                topic_name.encoded_length()
+                    + packet_id.and(Some(2)).unwrap_or(0)
+                    + message.encoded_length()
+            }
+            Subscribe { subscriptions, .. } => 2 + subscriptions.encoded_length(),
+            SubAck { results, .. } => 2 + results.encoded_length(),
+            Unsubscribe { topics, .. } => 2 + topics.encoded_length(),
+            PingReq | PingResp | Disconnect => 0,
         }
     }
-    
+
     /// Determine the length of the encoded packet, if possible. Packets bigger then 256MB cannot be encoded, and
     /// will cause this method to return `None`.
     pub fn len(&self) -> Option<usize> {
@@ -206,41 +237,45 @@ impl<'a> MqttPacket<'a> {
             128...16_383 => Some(2),
             16_384...2_097_151 => Some(3),
             2_097_152 => Some(4),
-            _ => None
-        }.map(|b| 1 + b + payload_size)
+            _ => None,
+        }
+        .map(|b| 1 + b + payload_size)
     }
-    
+
     /// Validates that the packet is correct according to the MQTT protocol rules.
     ///
     /// This function checks the Quality of Service rules for the Publish packet, and that Subscribe, Unsubscribe,
     /// and SubAck payloads are not empty.
     pub fn validate(&self) -> Result<(), Error<'a>> {
         use self::MqttPacket::*;
-        
+
         match self {
-            Publish{ packet_id, qos, dup, ..} => {
-                match qos {
-                    QualityOfService::QoS0 => {
-                        ensure!(!*dup, InvalidDupFlag);
-                        ensure!(packet_id.is_none(), UnexpectedPublishPacketId);
-                    },
-                    _ => {
-                        ensure!(packet_id.is_some(), MissingPublishPacketId);
-                    }
+            Publish {
+                packet_id,
+                qos,
+                dup,
+                ..
+            } => match qos {
+                QualityOfService::QoS0 => {
+                    ensure!(!*dup, InvalidDupFlag);
+                    ensure!(packet_id.is_none(), UnexpectedPublishPacketId);
+                }
+                _ => {
+                    ensure!(packet_id.is_some(), MissingPublishPacketId);
                 }
             },
-            Unsubscribe{ topics, ..} => {
+            Unsubscribe { topics, .. } => {
                 ensure!(!topics.is_empty(), MissingPayload);
-            },
-            Subscribe{ subscriptions, .. } => {
+            }
+            Subscribe { subscriptions, .. } => {
                 ensure!(!subscriptions.is_empty(), MissingPayload);
-            },
-            SubAck{ results, .. } => {
+            }
+            SubAck { results, .. } => {
                 ensure!(!results.is_empty(), MissingPayload);
-            },
+            }
             _ => {}
-         }
-         
-         Ok(())
+        }
+
+        Ok(())
     }
 }

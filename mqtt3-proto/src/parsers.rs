@@ -1,17 +1,17 @@
 use std::convert::TryFrom;
 use std::str;
 
-use nom::{IResult, Err};
-use nom::error::*;
-use nom::number::streaming::{be_u8, be_u16};
 use nom::bits::{bits, streaming::take_bits};
-use nom::multi::many1;
 use nom::bytes::streaming::take;
-use nom::combinator::{complete, flat_map, map, cond, map_parser};
+use nom::combinator::{complete, cond, flat_map, map, map_parser};
+use nom::error::*;
+use nom::multi::many1;
+use nom::number::streaming::{be_u16, be_u8};
 use nom::sequence::tuple;
+use nom::{Err, IResult};
 
-use super::types::*;
 use super::errors::Error;
+use super::types::*;
 use super::MqttPacket;
 
 #[derive(PartialEq, Debug)]
@@ -59,17 +59,20 @@ impl<'a> ParseError<(&'a [u8], usize)> for ParserError<'a> {
 
 type ParserResult<'a, I, O> = IResult<I, O, ParserError<'a>>;
 
-fn map_res_err<I: Clone, O1, O2, E: ParseError<I>, F, G>(first: F, second: G) -> impl Fn(I) -> IResult<I, O2, E>
+fn map_res_err<I: Clone, O1, O2, E: ParseError<I>, F, G>(
+    first: F,
+    second: G,
+) -> impl Fn(I) -> IResult<I, O2, E>
 where
     F: Fn(I) -> IResult<I, O1, E>,
-    G: Fn(O1) -> Result<O2, E>
+    G: Fn(O1) -> Result<O2, E>,
 {
     move |input: I| {
         let i = input.clone();
         let (input, o1) = first(input)?;
         match second(o1) {
             Ok(o2) => Ok((input, o2)),
-            Err(e) => Err(Err::Error(E::append(i, ErrorKind::MapRes, e)))
+            Err(e) => Err(Err::Error(E::append(i, ErrorKind::MapRes, e))),
         }
     }
 }
@@ -85,7 +88,7 @@ fn vle(input: &[u8]) -> ParserResult<&[u8], usize> {
 
         value += (b as usize & 127) * multiplier;
 
-        if multiplier > 128*128*128 {
+        if multiplier > 128 * 128 * 128 {
             return Err(Err::Failure(ParserError::some(Error::VleOverflow)));
         }
 
@@ -102,7 +105,7 @@ fn vle(input: &[u8]) -> ParserResult<&[u8], usize> {
 
 #[cfg(test)]
 mod vle_tests {
-    use super::{vle, ParserError, Err, Error};
+    use super::{vle, Err, Error, ParserError};
     use nom::Needed;
 
     #[test]
@@ -132,7 +135,10 @@ mod vle_tests {
     #[test]
     fn overflow_vle() {
         let input = [0x80, 0x80, 0x80, 0x80, 0x01];
-        assert_eq!(vle(&input), Err(Err::Failure(ParserError::some(Error::VleOverflow))));
+        assert_eq!(
+            vle(&input),
+            Err(Err::Failure(ParserError::some(Error::VleOverflow)))
+        );
     }
 
     #[test]
@@ -145,56 +151,62 @@ mod vle_tests {
 fn add_error<'a, I, O, F, G>(parser: F, op: G) -> impl Fn(I) -> ParserResult<'a, I, O>
 where
     F: Fn(I) -> ParserResult<'a, I, O>,
-    G: Fn() -> Error<'a>
+    G: Fn() -> Error<'a>,
 {
     move |input: I| match parser(input) {
         Ok(o) => Ok(o),
         Err(Err::Incomplete(n)) => Err(Err::Incomplete(n)),
         Err(Err::Error(e)) => Err(Err::Error(e.into_inner().or(Some(op())).into())),
-        Err(Err::Failure(e)) => Err(Err::Failure(e.into_inner().or(Some(op())).into()))
+        Err(Err::Failure(e)) => Err(Err::Failure(e.into_inner().or(Some(op())).into())),
     }
 }
 
 fn mqtt_string<'a>(input: &'a [u8]) -> ParserResult<'a, &'a [u8], MqttString<'a>> {
     map_res_err(
-        map_res_err(
-            flat_map(be_u16, take),
-            |b| str::from_utf8(b)
-                .map_err(|e| ParserError(Some(Error::StringNotUtf8{ input: b.clone(), source: e })))
-        ),
-        |s| MqttString::new(s).map_err(|e| ParserError::some(e))
+        map_res_err(flat_map(be_u16, take), |b| {
+            str::from_utf8(b).map_err(|e| {
+                ParserError(Some(Error::StringNotUtf8 {
+                    input: b.clone(),
+                    source: e,
+                }))
+            })
+        }),
+        |s| MqttString::new(s).map_err(|e| ParserError::some(e)),
     )(input)
 }
 
 #[cfg(test)]
 mod mqtt_string_tests {
-    use super::{mqtt_string, MqttString, ParserError, Err, Error};
+    use super::{mqtt_string, Err, Error, MqttString, ParserError};
     use nom::Needed;
 
     #[test]
     fn normal_strings() {
         let one = [0, 4, 77, 81, 84, 84];
-        assert_eq!(mqtt_string(&one), Ok((&[][..], MqttString::new_unchecked("MQTT"))));
+        assert_eq!(
+            mqtt_string(&one),
+            Ok((&[][..], MqttString::new_unchecked("MQTT")))
+        );
     }
 }
 
 fn connect_packet<'a>(input: &'a [u8]) -> ParserResult<'a, &'a [u8], MqttPacket<'a>> {
     // Headers
-    let (r1, _) = map_res_err(mqtt_string, |name| if name.as_ref() == "MQTT" {
-        Ok(name)
-    } else {
-        Err(ParserError::some(Error::InvalidProtocolName{ name: name }))
+    let (r1, _) = map_res_err(mqtt_string, |name| {
+        if name.as_ref() == "MQTT" {
+            Ok(name)
+        } else {
+            Err(ParserError::some(Error::InvalidProtocolName { name: name }))
+        }
     })(input)?;
 
-    let (r2, protocol_level) = map_res_err(
-        be_u8,
-        |pl| ProtoLvl::try_from(pl).map_err(|e| ParserError::some(e))
-    )(r1)?;
+    let (r2, protocol_level) = map_res_err(be_u8, |pl| {
+        ProtoLvl::try_from(pl).map_err(|e| ParserError::some(e))
+    })(r1)?;
 
-    let (r3, connect_flags) = map_res_err(
-        be_u8,
-        |cf| ConnFlags::try_from(cf).map_err(|e| ParserError::some(e))
-    )(r2)?;
+    let (r3, connect_flags) = map_res_err(be_u8, |cf| {
+        ConnFlags::try_from(cf).map_err(|e| ParserError::some(e))
+    })(r2)?;
 
     let (r4, keep_alive) = be_u16(r3)?;
 
@@ -203,73 +215,78 @@ fn connect_packet<'a>(input: &'a [u8]) -> ParserResult<'a, &'a [u8], MqttPacket<
 
     let (r6, lwt) = cond(
         connect_flags.has_lwt(),
-        tuple((mqtt_string, flat_map(be_u16, take)))
+        tuple((mqtt_string, flat_map(be_u16, take))),
     )(r5)?;
 
-    let (r7, username) = cond(
-        connect_flags.has_username(),
-        mqtt_string
-    )(r6)?;
+    let (r7, username) = cond(connect_flags.has_username(), mqtt_string)(r6)?;
 
-    let (r8, password) = cond(
-        connect_flags.has_password(),
-        flat_map(be_u16, take)
-    )(r7)?;
+    let (r8, password) = cond(connect_flags.has_password(), flat_map(be_u16, take))(r7)?;
 
-    Ok((r8, MqttPacket::Connect {
-        protocol_level,
-        clean_session: connect_flags.is_clean(),
-        keep_alive,
-        client_id,
-        lwt: lwt.map(|(t, p)| LWTMessage::from_flags(connect_flags, t, p)),
-        credentials: username.map(|u| Credentials {
-            username: u,
-            password
-        })
-    }))
+    Ok((
+        r8,
+        MqttPacket::Connect {
+            protocol_level,
+            clean_session: connect_flags.is_clean(),
+            keep_alive,
+            client_id,
+            lwt: lwt.map(|(t, p)| LWTMessage::from_flags(connect_flags, t, p)),
+            credentials: username.map(|u| Credentials {
+                username: u,
+                password,
+            }),
+        },
+    ))
 }
 
 fn conn_ack_packet<'a>(input: &'a [u8]) -> ParserResult<'a, &'a [u8], MqttPacket<'a>> {
     // Headers
-    let (r1, flags) = map_res_err(
-        be_u8,
-        |b| ConnAckFlags::try_from(b).map_err(|e| ParserError::some(e))
-    )(input)?;
+    let (r1, flags) = map_res_err(be_u8, |b| {
+        ConnAckFlags::try_from(b).map_err(|e| ParserError::some(e))
+    })(input)?;
 
-    let (r2, result) = map_res_err(
-        be_u8,
-        |c| connect_result_from_u8(c).map_err(|e| ParserError::some(e))
-    )(r1)?;
-    
-    Ok((r2, MqttPacket::ConnAck {
-        result: result.and(Ok(flags))
-    }))
+    let (r2, result) = map_res_err(be_u8, |c| {
+        connect_result_from_u8(c).map_err(|e| ParserError::some(e))
+    })(r1)?;
+
+    Ok((
+        r2,
+        MqttPacket::ConnAck {
+            result: result.and(Ok(flags)),
+        },
+    ))
 }
 
-fn publish_packet<'a>(input: &'a [u8], flags: PacketFlags) -> ParserResult<'a, &'a [u8], MqttPacket<'a>> {
+fn publish_packet<'a>(
+    input: &'a [u8],
+    flags: PacketFlags,
+) -> ParserResult<'a, &'a [u8], MqttPacket<'a>> {
     // Headers
     let (r1, topic_name) = mqtt_string(input)?;
-    
+
     let (r2, packet_id) = cond(
         flags.intersects(PacketFlags::QOS1 | PacketFlags::QOS2),
-        be_u16
+        be_u16,
     )(r1)?;
 
     // Payload
     let (r3, message) = flat_map(be_u16, take)(r2)?;
 
-    Ok((r3, MqttPacket::Publish {
-        dup: flags.is_duplicate(),
-        qos: flags.qos(),
-        retain: flags.is_retain(),
-        topic_name,
-        packet_id,
-        message
-    }))
+    Ok((
+        r3,
+        MqttPacket::Publish {
+            dup: flags.is_duplicate(),
+            qos: flags.qos(),
+            retain: flags.is_retain(),
+            topic_name,
+            packet_id,
+            message,
+        },
+    ))
 }
 
 fn packet_id_header<'a, C>(input: &'a [u8], build: C) -> ParserResult<&'a [u8], MqttPacket<'a>>
-    where C: Fn(u16) -> MqttPacket<'a>
+where
+    C: Fn(u16) -> MqttPacket<'a>,
 {
     map(be_u16, build)(input)
 }
@@ -279,21 +296,26 @@ fn subscribe_packet<'a>(input: &'a [u8]) -> ParserResult<'a, &'a [u8], MqttPacke
     let (r1, packet_id) = be_u16(input)?;
 
     // Payload
-    let (r2, subscriptions) = add_error(many1(map(
-        tuple((
-            mqtt_string,
-            map_res_err(
-                be_u8,
-                |b| QualityOfService::try_from(b).map_err(|e| ParserError::some(e))
-            )
+    let (r2, subscriptions) = add_error(
+        many1(map(
+            tuple((
+                mqtt_string,
+                map_res_err(be_u8, |b| {
+                    QualityOfService::try_from(b).map_err(|e| ParserError::some(e))
+                }),
+            )),
+            |(t, q)| SubscriptionTuple(t, q),
         )),
-        |(t, q)| SubscriptionTuple(t, q)
-    )), || Error::MissingPayload)(r1)?;
+        || Error::MissingPayload,
+    )(r1)?;
 
-    Ok((r2, MqttPacket::Subscribe {
-        packet_id,
-        subscriptions
-    }))
+    Ok((
+        r2,
+        MqttPacket::Subscribe {
+            packet_id,
+            subscriptions,
+        },
+    ))
 }
 
 fn sub_ack_packet<'a>(input: &'a [u8]) -> ParserResult<&'a [u8], MqttPacket<'a>> {
@@ -301,21 +323,20 @@ fn sub_ack_packet<'a>(input: &'a [u8]) -> ParserResult<&'a [u8], MqttPacket<'a>>
     let (r1, packet_id) = be_u16(input)?;
 
     // Payload
-    let (r2, results) = add_error(many1(map_res_err(
-        be_u8,
-        |code| match code {
+    let (r2, results) = add_error(
+        many1(map_res_err(be_u8, |code| match code {
             0 => Ok(Some(QualityOfService::QoS0)),
             1 => Ok(Some(QualityOfService::QoS1)),
             2 => Ok(Some(QualityOfService::QoS2)),
             128 => Ok(None),
-            _ => Err(ParserError::some(Error::InvalidSubAckReturnCode{ return_code: code }))
-        }
-    )), || Error::MissingPayload)(r1)?;
+            _ => Err(ParserError::some(Error::InvalidSubAckReturnCode {
+                return_code: code,
+            })),
+        })),
+        || Error::MissingPayload,
+    )(r1)?;
 
-    Ok((r2, MqttPacket::SubAck {
-        packet_id,
-        results
-    }))
+    Ok((r2, MqttPacket::SubAck { packet_id, results }))
 }
 
 fn unsubscribe_packet<'a>(input: &'a [u8]) -> ParserResult<&'a [u8], MqttPacket<'a>> {
@@ -325,34 +346,36 @@ fn unsubscribe_packet<'a>(input: &'a [u8]) -> ParserResult<&'a [u8], MqttPacket<
     // Payload
     let (r2, topics) = add_error(many1(mqtt_string), || Error::MissingPayload)(r1)?;
 
-    Ok((r2, MqttPacket::Unsubscribe {
-        packet_id,
-        topics
-    }))
+    Ok((r2, MqttPacket::Unsubscribe { packet_id, topics }))
 }
 
-fn packet_body<'a>(ty: PacketType, flags: PacketFlags) -> impl Fn(&'a [u8]) -> ParserResult<&'a [u8], MqttPacket<'a>> {
-    move |input: &[u8]| {
-        match ty {
-            PacketType::Connect => connect_packet(input),
-            PacketType::ConnAck => conn_ack_packet(input),
-            PacketType::Publish => publish_packet(input, flags),
-            PacketType::PubAck => packet_id_header(input, |id| MqttPacket::PubAck {packet_id: id}),
-            PacketType::PubRec => packet_id_header(input, |id| MqttPacket::PubRec {packet_id: id}),
-            PacketType::PubRel =>  packet_id_header(input, |id| MqttPacket::PubRel {packet_id: id}),
-            PacketType::PubComp =>  packet_id_header(input, |id| MqttPacket::PubComp {packet_id: id}),
-            PacketType::Subscribe => subscribe_packet(input),
-            PacketType::SubAck => sub_ack_packet(input),
-            PacketType::Unsubscribe => unsubscribe_packet(input),
-            PacketType::UnsubAck => packet_id_header(input, |id| MqttPacket::UnsubAck {packet_id: id}),
-            PacketType::PingReq => Ok((input, MqttPacket::PingReq)),
-            PacketType::PingResp => Ok((input, MqttPacket::PingResp)),
-            PacketType::Disconnect => Ok((input, MqttPacket::Disconnect))
+fn packet_body<'a>(
+    ty: PacketType,
+    flags: PacketFlags,
+) -> impl Fn(&'a [u8]) -> ParserResult<&'a [u8], MqttPacket<'a>> {
+    move |input: &[u8]| match ty {
+        PacketType::Connect => connect_packet(input),
+        PacketType::ConnAck => conn_ack_packet(input),
+        PacketType::Publish => publish_packet(input, flags),
+        PacketType::PubAck => packet_id_header(input, |id| MqttPacket::PubAck { packet_id: id }),
+        PacketType::PubRec => packet_id_header(input, |id| MqttPacket::PubRec { packet_id: id }),
+        PacketType::PubRel => packet_id_header(input, |id| MqttPacket::PubRel { packet_id: id }),
+        PacketType::PubComp => packet_id_header(input, |id| MqttPacket::PubComp { packet_id: id }),
+        PacketType::Subscribe => subscribe_packet(input),
+        PacketType::SubAck => sub_ack_packet(input),
+        PacketType::Unsubscribe => unsubscribe_packet(input),
+        PacketType::UnsubAck => {
+            packet_id_header(input, |id| MqttPacket::UnsubAck { packet_id: id })
         }
+        PacketType::PingReq => Ok((input, MqttPacket::PingReq)),
+        PacketType::PingResp => Ok((input, MqttPacket::PingResp)),
+        PacketType::Disconnect => Ok((input, MqttPacket::Disconnect)),
     }
 }
 
-fn packet_flags<'a>(ty: PacketType) -> impl Fn((&'a [u8], usize)) -> ParserResult<'a, (&'a [u8], usize), (PacketType, PacketFlags)> {
+fn packet_flags<'a>(
+    ty: PacketType,
+) -> impl Fn((&'a [u8], usize)) -> ParserResult<'a, (&'a [u8], usize), (PacketType, PacketFlags)> {
     move |input: (&'a [u8], usize)| {
         use self::PacketType::*;
 
@@ -361,15 +384,19 @@ fn packet_flags<'a>(ty: PacketType) -> impl Fn((&'a [u8], usize)) -> ParserResul
         let expected: u8 = match ty {
             Publish => received,
             Subscribe | Unsubscribe => 0b0010,
-            _ => 0b0000
+            _ => 0b0000,
         };
 
         let res = if received == expected {
             Ok(received)
         } else {
-            Err(Error::UnexpectedPacketFlags{ expected, ty, received })
+            Err(Error::UnexpectedPacketFlags {
+                expected,
+                ty,
+                received,
+            })
         };
-        
+
         res.and_then(|b| PacketFlags::try_from(b))
             .map(|f| (rest, (ty, f)))
             .map_err(|e| Err::Error(ParserError::some(e)))
@@ -378,11 +405,13 @@ fn packet_flags<'a>(ty: PacketType) -> impl Fn((&'a [u8], usize)) -> ParserResul
 
 pub(crate) fn packet<'a>(input: &'a [u8]) -> ParserResult<&'a [u8], MqttPacket<'a>> {
     let (rest, (ty, flags)) = bits(flat_map(
-        map_res_err(
-            take_bits(4usize),
-            |b: u8| PacketType::try_from(b).map_err(|e| ParserError::some(e))
-        ),
-        packet_flags
+        map_res_err(take_bits(4usize), |b: u8| {
+            PacketType::try_from(b).map_err(|e| ParserError::some(e))
+        }),
+        packet_flags,
     ))(input)?;
-    map_parser(flat_map(vle, take), add_error(complete(packet_body(ty, flags)), || Error::IncompletePacket))(rest)
+    map_parser(
+        flat_map(vle, take),
+        add_error(complete(packet_body(ty, flags)), || Error::IncompletePacket),
+    )(rest)
 }
