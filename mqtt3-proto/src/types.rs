@@ -1,5 +1,5 @@
 use std::fmt;
-use std::convert::{TryFrom, From};
+use std::convert::{TryFrom, From, AsRef};
 use bytes::{BufMut};
 use errors::*;
 
@@ -351,19 +351,52 @@ impl Encodable for &[u8] {
     }
 }
 
-impl Encodable for &str {
+/// A wrapper type around a `&str` that enforces the requirements for a MQTT packet string.
+/// 1. The string length is <= 65535 bytes.
+/// 2. Does not contain the null character U+0000.
+#[derive(PartialEq, Debug, Clone)]
+pub struct MqttString<'a>(&'a str);
+
+impl<'a> MqttString<'a> {
+    /// Create a new MqttString using `s`. Will return an error if the string requirements aren't met.
+    pub fn new(s: &'a str) -> Result<MqttString<'a>, Error<'a>> {
+        ensure!(s.len() <= 65535, StringTooBig{ string: s });
+        ensure!(!s.contains('\0'), InvalidString{ string: s });
+
+        Ok(MqttString(s))
+    }
+
+    /// Creates a new MqttString that is not checked for validity. Only use if you know the string is valid.
+    pub fn new_unchecked(s: &'a str) -> MqttString<'a> {
+        MqttString(s)
+    }
+}
+
+impl<'a> AsRef<str> for MqttString<'a> {
+    fn as_ref(&self) -> &str {
+        self.0
+    }
+}
+
+impl<'a> fmt::Display for MqttString<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl<'a> Encodable for MqttString<'a> {
     fn encode<B: BufMut>(&self, out: &mut B) {
-        out.put_u16_be(self.len() as u16);
-        out.put_slice(self.as_bytes());
+        out.put_u16_be(self.0.len() as u16);
+        out.put_slice(self.0.as_bytes());
     }
 
     fn encoded_length(&self) -> usize {
-        2 + self.len()
+        2 + self.as_ref().len()
     }
 }
 
 /// A tuple of the topic and requested Quality of Service level for a subscription request.
-pub struct SubscriptionTuple<'a>(pub &'a str, pub QualityOfService);
+pub struct SubscriptionTuple<'a>(pub MqttString<'a>, pub QualityOfService);
 
 impl<'a> Encodable for SubscriptionTuple<'a> {
     fn encode<B: BufMut>(&self, out: &mut B) {
@@ -378,11 +411,11 @@ impl<'a> Encodable for SubscriptionTuple<'a> {
 
 /// A Last Will and Testament message.
 /// 
-/// This type holds the Last Will and Testament message sent to the server upon connection. If the client unexpectedly
-/// disconnects, this message will be sent by the server.
+/// This type holds the Last Will and Testament message sent to the server upon connection.
+/// If the client unexpectedly disconnects, this message will be sent by the server.
 #[derive(Builder, Clone)]
-pub struct LWTMessage<T: AsRef<str>, P: AsRef<[u8]>> {
-    pub topic: T,
+pub struct LWTMessage<'a, P: AsRef<[u8]>> {
+    pub topic: MqttString<'a>,
     #[builder(default = QualityOfService::QoS0)]
     pub qos: QualityOfService,
     #[builder(default = "false")]
@@ -391,8 +424,8 @@ pub struct LWTMessage<T: AsRef<str>, P: AsRef<[u8]>> {
     pub message: P
 }
 
-impl<T: AsRef<str>, P: AsRef<[u8]>> LWTMessage<T, P> {
-    pub(crate) fn from_flags(flags: ConnFlags, t: T, m: P) -> LWTMessage<T, P> {
+impl<'a, P: AsRef<[u8]>> LWTMessage<'a, P> {
+    pub(crate) fn from_flags(flags: ConnFlags, t: MqttString<'a>, m: P) -> LWTMessage<'a, P> {
         LWTMessage {
             topic: t,
             qos: flags.into(),
@@ -401,9 +434,10 @@ impl<T: AsRef<str>, P: AsRef<[u8]>> LWTMessage<T, P> {
         }
     }
 
-    pub fn as_ref(&self) -> LWTMessage<&str, &[u8]> {
+    /// Converts `LWTMessage<P>` to `LWTMessage<&[u8]>`.
+    pub fn as_ref(&self) -> LWTMessage<'a, &[u8]> {
         LWTMessage {
-            topic: self.topic.as_ref(),
+            topic: self.topic.clone(),
             qos: self.qos,
             retain: self.retain,
             message: self.message.as_ref()
@@ -417,7 +451,7 @@ impl<T: AsRef<str>, P: AsRef<[u8]>> LWTMessage<T, P> {
     }
 }
 
-impl Encodable for LWTMessage<&str, &[u8]> {
+impl<'a> Encodable for LWTMessage<'a, &[u8]> {
     fn encode<B: BufMut>(&self, out: &mut B) {
         self.topic.encode(out);
         self.message.encode(out);
@@ -429,22 +463,22 @@ impl Encodable for LWTMessage<&str, &[u8]> {
 }
 
 /// Container for MQTT credentials, which is a username and optional password.
-pub struct Credentials<U: AsRef<str>, P: AsRef<[u8]>> {
-    pub username: U,
+pub struct Credentials<'a, P: AsRef<[u8]>> {
+    pub username: MqttString<'a>,
     pub password: Option<P>
 }
 
-impl<U: AsRef<str>, P: AsRef<[u8]>> Credentials<U, P> {
-    /// Converts `Credentials<U, P>` to `Credentials<&str, &[u8]>`
-    pub fn as_ref(&self) -> Credentials<&str, &[u8]> {
+impl<'a, P: AsRef<[u8]>> Credentials<'a, P> {
+    /// Converts `Credentials<P>` to `Credentials<&[u8]>`.
+    pub fn as_ref(&self) -> Credentials<'a, &[u8]> {
         Credentials {
-            username: self.username.as_ref(),
+            username: self.username.clone(),
             password: self.password.as_ref().map(|p| p.as_ref())
         }
     }
 }
 
-impl Encodable for Credentials<&str, &[u8]> {
+impl<'a> Encodable for Credentials<'a, &[u8]> {
     fn encode<B: BufMut>(&self, out: &mut B) {
         self.username.encode(out);
         if let Some(pass) = self.password {
