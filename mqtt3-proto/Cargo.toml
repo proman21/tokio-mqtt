@@ -1,6 +1,6 @@
 [package]
 name = "mqtt3-proto"
-description = "Types for MQTTv3 protocol packets, as well as parser and encoder. Also contains a few extra utils for implementing the protocol."
+description = "Types for MQTTv3 protocol packets, as well as parser and encoder."
 version = "1.0.0"
 authors = ["Adam Jacobus <adam.m.jacobus@gmail.com>"]
 categories = ["encoding", "network-programming", "parser-implementations"]
