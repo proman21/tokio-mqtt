@@ -33,11 +33,9 @@ pub enum MqttPacket<'a> {
         result: Result<ConnAckFlags, ConnectError>,
     },
     Publish {
-        dup: bool,
-        qos: QualityOfService,
+        pub_type: PublishType,
         retain: bool,
         topic_name: MqttString<'a>,
-        packet_id: Option<u16>,
         message: &'a [u8],
     },
     PubAck {

@@ -56,10 +56,9 @@ impl<'a> MqttPacket<'a> {
 
         match self {
             Publish {
-                dup, qos, retain, ..
+                pub_type, retain, ..
             } => {
-                let mut flags = PacketFlags::from(*qos);
-                flags.set(PacketFlags::DUP, *dup);
+                let mut flags = pub_type.packet_flags();
                 flags.set(PacketFlags::RET, *retain);
                 flags
             }
@@ -153,13 +152,13 @@ impl<'a> MqttPacket<'a> {
             },
             Publish {
                 topic_name,
-                packet_id,
+                pub_type,
                 message,
                 ..
             } => {
                 topic_name.encode(out);
-                if let Some(id) = packet_id {
-                    out.put_u16_be(*id);
+                if let Some(id) = pub_type.packet_id() {
+                    out.put_u16_be(id);
                 }
                 out.put_slice(message);
             }
@@ -214,11 +213,11 @@ impl<'a> MqttPacket<'a> {
             Publish {
                 topic_name,
                 message,
-                packet_id,
+                pub_type,
                 ..
             } => {
                 topic_name.encoded_length()
-                    + packet_id.and(Some(2)).unwrap_or(0)
+                    + pub_type.packet_id().and(Some(2)).unwrap_or(0)
                     + message.encoded_length()
             }
             Subscribe { subscriptions, .. } => 2 + subscriptions.encoded_length(),
@@ -244,26 +243,11 @@ impl<'a> MqttPacket<'a> {
 
     /// Validates that the packet is correct according to the MQTT protocol rules.
     ///
-    /// This function checks the Quality of Service rules for the Publish packet, and that Subscribe, Unsubscribe,
-    /// and SubAck payloads are not empty.
+    /// This function checks that Subscribe, Unsubscribe, and SubAck payloads are not empty.
     pub fn validate(&self) -> Result<(), Error<'a>> {
         use self::MqttPacket::*;
 
         match self {
-            Publish {
-                packet_id,
-                qos,
-                dup,
-                ..
-            } => match qos {
-                QualityOfService::QoS0 => {
-                    ensure!(!*dup, InvalidDupFlag);
-                    ensure!(packet_id.is_none(), UnexpectedPublishPacketId);
-                }
-                _ => {
-                    ensure!(packet_id.is_some(), MissingPublishPacketId);
-                }
-            },
             Unsubscribe { topics, .. } => {
                 ensure!(!topics.is_empty(), MissingPayload);
             }

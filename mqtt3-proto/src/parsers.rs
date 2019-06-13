@@ -271,14 +271,15 @@ fn publish_packet<'a>(
     // Payload
     let (r3, message) = flat_map(be_u16, take)(r2)?;
 
+    let pub_type =
+        PublishType::new(flags, packet_id).map_err(|e| Err::Error(ParserError::some(e)))?;
+
     Ok((
         r3,
         MqttPacket::Publish {
-            dup: flags.is_duplicate(),
-            qos: flags.qos(),
+            pub_type,
             retain: flags.is_retain(),
             topic_name,
-            packet_id,
             message,
         },
     ))

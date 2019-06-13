@@ -132,6 +132,77 @@ impl TryFrom<u8> for ConnAckFlags {
     }
 }
 
+pub enum PublishType {
+    QoS0,
+    QoS1 { packet_id: u16, dup: bool },
+    QoS2 { packet_id: u16, dup: bool },
+}
+
+impl PublishType {
+    pub(crate) fn new<'a>(
+        flags: PacketFlags,
+        packet_id: Option<u16>,
+    ) -> Result<PublishType, Error<'a>> {
+        match flags.qos() {
+            QualityOfService::QoS0 => {
+                ensure!(!flags.is_duplicate(), InvalidDupFlag);
+                ensure!(packet_id.is_none(), UnexpectedPublishPacketId);
+                Ok(PublishType::QoS0)
+            }
+            QualityOfService::QoS1 => {
+                packet_id
+                    .ok_or(Error::MissingPublishPacketId)
+                    .map(|id| PublishType::QoS1 {
+                        packet_id: id,
+                        dup: flags.is_duplicate(),
+                    })
+            }
+            QualityOfService::QoS2 => {
+                packet_id
+                    .ok_or(Error::MissingPublishPacketId)
+                    .map(|id| PublishType::QoS2 {
+                        packet_id: id,
+                        dup: flags.is_duplicate(),
+                    })
+            }
+        }
+    }
+
+    pub fn packet_id(&self) -> Option<u16> {
+        match self {
+            PublishType::QoS0 => None,
+            PublishType::QoS1 { packet_id, .. } => Some(*packet_id),
+            PublishType::QoS2 { packet_id, .. } => Some(*packet_id),
+        }
+    }
+
+    pub(crate) fn packet_flags(&self) -> PacketFlags {
+        match self {
+            PublishType::QoS0 => PacketFlags::empty(),
+            PublishType::QoS1 { dup, .. } => {
+                let mut flags = PacketFlags::QOS1;
+                flags.set(PacketFlags::DUP, *dup);
+                flags
+            }
+            PublishType::QoS2 { dup, .. } => {
+                let mut flags = PacketFlags::QOS2;
+                flags.set(PacketFlags::DUP, *dup);
+                flags
+            }
+        }
+    }
+}
+
+impl From<PublishType> for QualityOfService {
+    fn from(value: PublishType) -> QualityOfService {
+        match value {
+            PublishType::QoS0 => QualityOfService::QoS0,
+            PublishType::QoS1 { .. } => QualityOfService::QoS1,
+            PublishType::QoS2 { .. } => QualityOfService::QoS2,
+        }
+    }
+}
+
 enum_from_primitive! {
     /// Types of packets in the MQTT Protocol.
     #[derive(Clone, Copy, Debug, PartialEq)]
