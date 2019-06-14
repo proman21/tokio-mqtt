@@ -110,13 +110,20 @@ impl TryFrom<u8> for ConnFlags {
     type Error = Error<'static>;
 
     fn try_from(value: u8) -> Result<ConnFlags, Error<'static>> {
-        ConnFlags::from_bits(value)
-            .ok_or(Error::InvalidConnectFlags { flags: value })
-            .and_then(|f| if f.contains(ConnFlags::WILL_QOS1 | ConnFlags::WILL_QOS2) {
-                Err(Error::InvalidConnectFlags{flags: f.bits()})
-            } else {
-                Ok(f)
-            })
+        let flags = ConnFlags::from_bits(value).ok_or(Error::InvalidConnectFlags { flags: value })?;
+        
+        if flags.has_password() {
+            ensure!(flags.has_username(), InvalidConnectFlags{ flags: value });
+        }
+        if flags.has_lwt() {
+            ensure!(!flags.contains(ConnFlags::WILL_QOS1 | ConnFlags::WILL_QOS2),
+                InvalidConnectFlags { flags: value });
+        } else {
+            ensure!(!flags.lwt_retain(), InvalidConnectFlags{ flags: value });
+            ensure!(flags.lwt_qos() == QualityOfService::QoS0, InvalidConnectFlags{ flags: value });
+        }
+
+        Ok(flags)
     }
 }
 
