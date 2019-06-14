@@ -75,6 +75,16 @@ bitflags! {
 }
 
 impl ConnFlags {
+    pub fn lwt_qos<'a>(&self) -> QualityOfService {
+        if self.intersects(ConnFlags::WILL_QOS1) {
+            QualityOfService::QoS1
+        } else if self.intersects(ConnFlags::WILL_QOS2) {
+            QualityOfService::QoS2
+        } else {
+            QualityOfService::QoS0
+        }
+    }
+
     pub fn is_clean(&self) -> bool {
         self.intersects(ConnFlags::CLEAN_SESS)
     }
@@ -341,18 +351,6 @@ impl TryFrom<u8> for QualityOfService {
     }
 }
 
-impl From<ConnFlags> for QualityOfService {
-    fn from(value: ConnFlags) -> QualityOfService {
-        if value.intersects(ConnFlags::WILL_QOS2) {
-            QualityOfService::QoS2
-        } else if value.intersects(ConnFlags::WILL_QOS1) {
-            QualityOfService::QoS1
-        } else {
-            QualityOfService::QoS0
-        }
-    }
-}
-
 impl fmt::Display for QualityOfService {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -496,8 +494,8 @@ impl<'a, P: AsRef<[u8]>> LWTMessage<'a, P> {
     pub(crate) fn from_flags(flags: ConnFlags, t: MqttString<'a>, m: P) -> LWTMessage<'a, P> {
         LWTMessage {
             topic: t,
-            qos: flags.into(),
-            retain: flags.intersects(ConnFlags::WILL_RETAIN),
+            qos: flags.lwt_qos(),
+            retain: flags.lwt_retain(),
             message: m,
         }
     }
