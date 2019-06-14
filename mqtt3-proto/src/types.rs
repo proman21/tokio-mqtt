@@ -46,7 +46,9 @@ impl TryFrom<u8> for PacketFlags {
     type Error = Error<'static>;
 
     fn try_from(value: u8) -> Result<PacketFlags, Error<'static>> {
-        PacketFlags::from_bits(value).ok_or(Error::InvalidPacketFlag { flags: value })
+        let flags = PacketFlags::from_bits(value).ok_or(Error::InvalidPacketFlag { flags: value })?;
+        ensure!(!flags.contains(PacketFlags::QOS1 | PacketFlags::QOS2), InvalidPacketFlag { flags: value });
+        Ok(flags)
     }
 }
 
