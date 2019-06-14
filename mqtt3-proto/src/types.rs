@@ -22,12 +22,10 @@ bitflags! {
 
 impl PacketFlags {
     pub fn qos(&self) -> QualityOfService {
-        if self.intersects(Self::QOS2 | Self::QOS1) {
-            if self.contains(Self::QOS2) {
-                QualityOfService::QoS2
-            } else {
-                QualityOfService::QoS1
-            }
+        if self.intersects(Self::QOS2) {
+            QualityOfService::QoS2
+        } else if self.intersects(Self::QOS1) {
+            QualityOfService::QoS1
         } else {
             QualityOfService::QoS0
         }
