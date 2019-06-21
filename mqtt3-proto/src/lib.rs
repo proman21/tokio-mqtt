@@ -9,12 +9,13 @@ extern crate nom;
 extern crate enum_primitive;
 extern crate bytes;
 
-pub mod errors;
+mod errors;
 mod packets;
 mod parsers;
 pub mod types;
 
 pub use types::*;
+pub use errors::*;
 
 /// A enumeration of possible control packets used in the MQTT Protocol.
 ///

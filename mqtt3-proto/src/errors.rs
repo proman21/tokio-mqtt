@@ -4,6 +4,7 @@ use types::{MqttString, PacketType};
 
 #[derive(Snafu, Debug, Clone, PartialEq)]
 #[snafu(visibility(pub(crate)))]
+/// All possible errors thrown in this library.
 pub enum Error<'a> {
     #[snafu(display("Packet size exceeded maximum size. Encoded size is {}.", encoded_size))]
     PacketTooBig { encoded_size: usize },
@@ -41,7 +42,7 @@ pub enum Error<'a> {
     InvalidConnAckFlags { flags: u8 },
     #[snafu(display("Invalid connect return code '{}'.", code))]
     InvalidConnectReturnCode { code: u8 },
-    #[snafu(display("VLE overflows allowed encoding size."))]
+    #[snafu(display("Packet size overflows allowed encoding size."))]
     VleOverflow,
     #[snafu(display("'{}' is not a valid Quality of Service level.", qos))]
     InvalidQos { qos: u8 },
