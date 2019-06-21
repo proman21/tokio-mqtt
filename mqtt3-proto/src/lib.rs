@@ -21,6 +21,7 @@ pub use errors::*;
 ///
 /// This type abstracts the on-wire representation of an MQTT Control packet to prevent the formation of invalid
 /// packets. It also attempts to be a memory efficient as possible using a zero-copy parser.
+#[derive(Clone, Debug, PartialEq)]
 pub enum MqttPacket<'a> {
     Connect {
         protocol_level: ProtoLvl,

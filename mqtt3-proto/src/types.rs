@@ -155,6 +155,7 @@ impl TryFrom<u8> for ConnAckFlags {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub enum PublishType {
     QoS0,
     QoS1 { packet_id: u16, dup: bool },
@@ -277,7 +278,7 @@ impl fmt::Display for PacketType {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ConnectError {
     BadProtoVersion = 1,
     ClientIdRejected = 2,
@@ -467,6 +468,7 @@ impl<'a> Encodable for MqttString<'a> {
 }
 
 /// A tuple of the topic and requested Quality of Service level for a subscription request.
+#[derive(Clone, Debug, PartialEq)]
 pub struct SubscriptionTuple<'a>(pub MqttString<'a>, pub QualityOfService);
 
 impl<'a> Encodable for SubscriptionTuple<'a> {
@@ -484,7 +486,7 @@ impl<'a> Encodable for SubscriptionTuple<'a> {
 ///
 /// This type holds the Last Will and Testament message sent to the server upon connection.
 /// If the client unexpectedly disconnects, this message will be sent by the server.
-#[derive(Builder, Clone)]
+#[derive(Builder, Clone, Debug, PartialEq)]
 pub struct LWTMessage<'a, P: AsRef<[u8]>> {
     pub topic: MqttString<'a>,
     #[builder(default = QualityOfService::QoS0)]
@@ -534,6 +536,7 @@ impl<'a> Encodable for LWTMessage<'a, &[u8]> {
 }
 
 /// Container for MQTT credentials, which is a username and optional password.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Credentials<'a, P: AsRef<[u8]>> {
     pub username: MqttString<'a>,
     pub password: Option<P>,
