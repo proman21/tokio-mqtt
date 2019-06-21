@@ -11,6 +11,59 @@ static CRC_3_MESSAGE: &'static str = "0x03 Connection Refused, Server unavailabl
 static CRC_4_MESSAGE: &'static str = "0x04 Connection Refused, bad user name or password";
 static CRC_5_MESSAGE: &'static str = "0x05 Connection Refused, not authorized";
 
+pub(crate) trait Encodable {
+    // Encodes the packet section into a buffer.
+    fn encode<B: BufMut>(&self, out: &mut B);
+    // Returns the size of the encoded section.
+    fn encoded_length(&self) -> usize;
+}
+
+impl<T: Encodable> Encodable for Vec<T> {
+    fn encode<B: BufMut>(&self, out: &mut B) {
+        for item in self {
+            item.encode(out);
+        }
+    }
+
+    fn encoded_length(&self) -> usize {
+        self.into_iter().fold(0, |acc, t| acc + t.encoded_length())
+    }
+}
+
+impl Encodable for &[u8] {
+    fn encode<B: BufMut>(&self, out: &mut B) {
+        out.put_u16_be(self.len() as u16);
+        out.put_slice(self);
+    }
+
+    fn encoded_length(&self) -> usize {
+        2 + self.len()
+    }
+}
+
+#[cfg(test)]
+mod encodable_tests {
+    use super::{Encodable, QualityOfService};
+
+    #[test]
+    fn vec_encodable() {
+        let data = vec![QualityOfService::QoS0, QualityOfService::QoS1, QualityOfService::QoS2];
+        let mut buf: Vec<u8> = Vec::new();
+        data.encode(&mut buf);
+        assert_eq!(data.encoded_length(), 3);
+        assert_eq!(buf, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn slice_encodable() {
+        let data = [1, 34, 96, 39, 20];
+        let mut buf: Vec<u8> = Vec::new();
+        (&data[..]).encode(&mut buf);
+        assert_eq!((&data[..]).encoded_length(), 7);
+        assert_eq!(buf, vec![0, 5, 1, 34, 96, 39, 20]);
+    }
+}
+
 bitflags! {
     pub(crate) struct PacketFlags: u8 {
         const DUP  = 0b1000;
@@ -57,6 +110,49 @@ impl From<QualityOfService> for PacketFlags {
             QualityOfService::QoS1 => PacketFlags::QOS1,
             QualityOfService::QoS2 => PacketFlags::QOS2,
         }
+    }
+}
+
+#[cfg(test)]
+mod packet_flag_tests {
+    use super::{Error, PacketFlags, QualityOfService};
+    use std::convert::TryFrom;
+
+    #[test]
+    fn conversion() {
+        // Basic conversion
+        assert_eq!(PacketFlags::try_from(0b0001), Ok(PacketFlags::RET));
+        assert_eq!(PacketFlags::try_from(0b0010), Ok(PacketFlags::QOS1));
+        assert_eq!(PacketFlags::try_from(0b0100), Ok(PacketFlags::QOS2));
+        assert_eq!(PacketFlags::try_from(0b1000), Ok(PacketFlags::DUP));
+        assert_eq!(PacketFlags::try_from(0b0110), Err(Error::InvalidPacketFlag{ flags: 0b0110 }));
+
+        // Multiple flags
+        assert_eq!(PacketFlags::try_from(0b1010), Ok(PacketFlags::DUP | PacketFlags::QOS1));
+        assert_eq!(PacketFlags::try_from(0b0101), Ok(PacketFlags::QOS2 | PacketFlags::RET));
+    }
+
+    #[test]
+    fn qos() {
+        assert_eq!(PacketFlags::QOS1.qos(), QualityOfService::QoS1);
+        assert_eq!(PacketFlags::QOS2.qos(), QualityOfService::QoS2);
+        assert_eq!(PacketFlags::RET.qos(), QualityOfService::QoS0);
+    }
+
+    #[test]
+    fn is_retain() {
+        assert!(PacketFlags::RET.is_retain());
+        assert!(!PacketFlags::QOS1.is_retain());
+        assert!(!PacketFlags::QOS2.is_retain());
+        assert!(!PacketFlags::DUP.is_retain());
+    }
+
+    #[test]
+    fn is_duplicate() {
+        assert!(PacketFlags::DUP.is_duplicate());
+        assert!(!PacketFlags::RET.is_duplicate());
+        assert!(!PacketFlags::QOS1.is_duplicate());
+        assert!(!PacketFlags::QOS2.is_duplicate());
     }
 }
 
@@ -128,10 +224,79 @@ impl TryFrom<u8> for ConnFlags {
 impl From<QualityOfService> for ConnFlags {
     fn from(value: QualityOfService) -> ConnFlags {
         match value {
-            QualityOfService::QoS0 => ConnFlags::empty(),
-            QualityOfService::QoS1 => ConnFlags::WILL_QOS1,
-            QualityOfService::QoS2 => ConnFlags::WILL_QOS2,
+            QualityOfService::QoS0 => ConnFlags::WILL_FLAG,
+            QualityOfService::QoS1 => ConnFlags::WILL_QOS1 | ConnFlags::WILL_FLAG,
+            QualityOfService::QoS2 => ConnFlags::WILL_QOS2 | ConnFlags::WILL_FLAG,
         }
+    }
+}
+
+#[cfg(test)]
+mod conn_flags_tests {
+    use super::{ConnFlags, Error, QualityOfService};
+    use std::convert::TryFrom;
+
+    #[test]
+    fn conversion() {
+        assert_eq!(ConnFlags::try_from(0b10000000), Ok(ConnFlags::USERNAME));
+        assert_eq!(ConnFlags::try_from(0b11000000), Ok(ConnFlags::USERNAME | ConnFlags::PASSWORD));
+        assert_eq!(ConnFlags::try_from(0b00100100), Ok(ConnFlags::WILL_RETAIN | ConnFlags::WILL_FLAG));
+        assert_eq!(ConnFlags::try_from(0b00010100), Ok(ConnFlags::WILL_QOS2 | ConnFlags::WILL_FLAG));
+        assert_eq!(ConnFlags::try_from(0b00001100), Ok(ConnFlags::WILL_QOS1 | ConnFlags::WILL_FLAG));
+        assert_eq!(ConnFlags::try_from(0b00000100), Ok(ConnFlags::WILL_FLAG));
+        assert_eq!(ConnFlags::try_from(0b00000010), Ok(ConnFlags::CLEAN_SESS));
+        assert_eq!(ConnFlags::try_from(0b00000000), Ok(ConnFlags::empty()));
+
+        assert_eq!(ConnFlags::try_from(0b00000001), Err(Error::InvalidConnectFlags{ flags: 1 }));
+        assert_eq!(ConnFlags::try_from(0b01000000), Err(Error::InvalidConnectFlags{ flags: 0b01000000 }));
+        assert_eq!(ConnFlags::try_from(0b00100000), Err(Error::InvalidConnectFlags{ flags: 0b00100000 }));
+        assert_eq!(ConnFlags::try_from(0b00010000), Err(Error::InvalidConnectFlags{ flags: 0b00010000 }));
+        assert_eq!(ConnFlags::try_from(0b00001000), Err(Error::InvalidConnectFlags{ flags: 0b00001000 }));
+        assert_eq!(ConnFlags::try_from(0b00011100), Err(Error::InvalidConnectFlags{ flags: 0b00011100 }));
+    }
+
+    #[test]
+    fn lwt_qos() {
+        assert_eq!(ConnFlags::WILL_QOS1.lwt_qos(), QualityOfService::QoS1);
+        assert_eq!(ConnFlags::WILL_QOS2.lwt_qos(), QualityOfService::QoS2);
+        assert_eq!(ConnFlags::empty().lwt_qos(), QualityOfService::QoS0);
+    }
+
+    #[test]
+    fn is_clean() {
+        assert!(ConnFlags::CLEAN_SESS.is_clean());
+        assert!(!(!ConnFlags::CLEAN_SESS).is_clean());
+    }
+
+    #[test]
+    fn has_username() {
+        assert!(ConnFlags::USERNAME.has_username());
+        assert!(!(!ConnFlags::USERNAME).has_username());
+    }
+
+    #[test]
+    fn has_password() {
+        assert!(ConnFlags::PASSWORD.has_password());
+        assert!(!(!ConnFlags::PASSWORD).has_password());
+    }
+
+    #[test]
+    fn has_lwt() {
+        assert!(ConnFlags::WILL_FLAG.has_lwt());
+        assert!(!(!ConnFlags::WILL_FLAG).has_lwt());
+    }
+
+    #[test]
+    fn lwt_retain() {
+        assert!(ConnFlags::WILL_RETAIN.lwt_retain());
+        assert!(!(!ConnFlags::WILL_RETAIN).lwt_retain());
+    }
+
+    #[test]
+    fn from_qos() {
+        assert_eq!(ConnFlags::from(QualityOfService::QoS0), ConnFlags::WILL_FLAG);
+        assert_eq!(ConnFlags::from(QualityOfService::QoS1), ConnFlags::WILL_FLAG | ConnFlags::WILL_QOS1);
+        assert_eq!(ConnFlags::from(QualityOfService::QoS2), ConnFlags::WILL_FLAG | ConnFlags::WILL_QOS2);
     }
 }
 
@@ -192,6 +357,15 @@ impl PublishType {
         }
     }
 
+    /// Get the packet ID, if one exists
+    /// 
+    /// # Examples
+    /// ```
+    /// # use mqtt3_proto::PublishType;
+    /// assert_eq!(PublishType::QoS0.packet_id(), None);
+    /// assert_eq!(PublishType::QoS1{ packet_id: 1, dup: false }.packet_id(), Some(1));
+    /// assert_eq!(PublishType::QoS2{ packet_id: 1, dup: false }.packet_id(), Some(1));
+    /// ```
     pub fn packet_id(&self) -> Option<u16> {
         match self {
             PublishType::QoS0 => None,
@@ -217,13 +391,39 @@ impl PublishType {
     }
 }
 
-impl From<PublishType> for QualityOfService {
-    fn from(value: PublishType) -> QualityOfService {
-        match value {
-            PublishType::QoS0 => QualityOfService::QoS0,
-            PublishType::QoS1 { .. } => QualityOfService::QoS1,
-            PublishType::QoS2 { .. } => QualityOfService::QoS2,
-        }
+#[cfg(test)]
+mod publish_type_tests {
+    use super::{PublishType, PacketFlags, Error};
+
+    #[test]
+    fn new() {
+        assert_eq!(PublishType::new(PacketFlags::empty(), None),
+            Ok(PublishType::QoS0));
+        assert_eq!(PublishType::new(PacketFlags::RET, None),
+            Ok(PublishType::QoS0));
+        assert_eq!(PublishType::new(PacketFlags::DUP, None), Err(Error::InvalidDupFlag));
+        assert_eq!(PublishType::new(PacketFlags::RET, Some(20)), Err(Error::UnexpectedPublishPacketId));
+        
+        assert_eq!(PublishType::new(PacketFlags::QOS1, Some(20)),
+            Ok(PublishType::QoS1{ packet_id: 20, dup: false}));
+        assert_eq!(PublishType::new(PacketFlags::QOS1 | PacketFlags::DUP, Some(20)),
+            Ok(PublishType::QoS1{ packet_id: 20, dup: true}));
+        assert_eq!(PublishType::new(PacketFlags::QOS1, None), Err(Error::MissingPublishPacketId));
+        
+        assert_eq!(PublishType::new(PacketFlags::QOS2, Some(20)),
+            Ok(PublishType::QoS2{ packet_id: 20, dup: false}));
+        assert_eq!(PublishType::new(PacketFlags::QOS2 | PacketFlags::DUP, Some(20)),
+            Ok(PublishType::QoS2{ packet_id: 20, dup: true}));
+        assert_eq!(PublishType::new(PacketFlags::QOS2, None), Err(Error::MissingPublishPacketId));
+    }
+
+    #[test]
+    fn packet_flags() {
+        assert_eq!(PublishType::QoS0.packet_flags(), PacketFlags::empty());
+        assert_eq!(PublishType::QoS1{packet_id: 10, dup: false}.packet_flags(), PacketFlags::QOS1);
+        assert_eq!(PublishType::QoS1{packet_id: 10, dup: true}.packet_flags(), PacketFlags::QOS1 | PacketFlags::DUP);
+        assert_eq!(PublishType::QoS2{packet_id: 10, dup: false}.packet_flags(), PacketFlags::QOS2);
+        assert_eq!(PublishType::QoS2{packet_id: 10, dup: true}.packet_flags(), PacketFlags::QOS2 | PacketFlags::DUP);
     }
 }
 
@@ -313,6 +513,22 @@ pub(crate) fn connect_result_from_u8(code: u8) -> Result<Result<(), ConnectError
     }
 }
 
+#[cfg(test)]
+mod connect_error_tests {
+    use super::{connect_result_from_u8, ConnectError, Error};
+
+    #[test]
+    fn conversion() {
+        assert_eq!(connect_result_from_u8(0), Ok(Ok(())));
+        assert_eq!(connect_result_from_u8(1), Ok(Err(ConnectError::BadProtoVersion)));
+        assert_eq!(connect_result_from_u8(2), Ok(Err(ConnectError::ClientIdRejected)));
+        assert_eq!(connect_result_from_u8(3), Ok(Err(ConnectError::ServerUnavailable)));
+        assert_eq!(connect_result_from_u8(4), Ok(Err(ConnectError::BadCredentials)));
+        assert_eq!(connect_result_from_u8(5), Ok(Err(ConnectError::Unauthorized)));
+        assert_eq!(connect_result_from_u8(128), Err(Error::InvalidConnectReturnCode { code: 128 }));
+    }
+}
+
 enum_from_primitive! {
     /// The protocol version used by a connection.
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -379,13 +595,10 @@ impl Encodable for QualityOfService {
 
 impl Encodable for Option<QualityOfService> {
     fn encode<B: BufMut>(&self, out: &mut B) {
-        let code = match self {
-            Some(QualityOfService::QoS0) => 0,
-            Some(QualityOfService::QoS1) => 1,
-            Some(QualityOfService::QoS2) => 2,
-            None => 128,
-        };
-        out.put_u8(code);
+        match self {
+            Some(q) => q.encode(out),
+            None => out.put_u8(128),
+        }
     }
 
     fn encoded_length(&self) -> usize {
@@ -393,33 +606,37 @@ impl Encodable for Option<QualityOfService> {
     }
 }
 
-pub(crate) trait Encodable {
-    // Encodes the packet section into a buffer.
-    fn encode<B: BufMut>(&self, out: &mut B);
-    // Returns the size of the encoded section.
-    fn encoded_length(&self) -> usize;
-}
+#[cfg(test)]
+mod qos_tests {
+    use super::{Encodable, QualityOfService};
 
-impl<T: Encodable> Encodable for Vec<T> {
-    fn encode<B: BufMut>(&self, out: &mut B) {
-        for item in self {
-            item.encode(out);
-        }
+    #[test]
+    fn qos_encode() {
+        let mut buf: Vec<u8> = Vec::new();
+        QualityOfService::QoS0.encode(&mut buf);
+        assert_eq!(buf, vec![0]);
+        buf.clear();
+        QualityOfService::QoS1.encode(&mut buf);
+        assert_eq!(buf, vec![1]);
+        buf.clear();
+        QualityOfService::QoS2.encode(&mut buf);
+        assert_eq!(buf, vec![2]);
     }
 
-    fn encoded_length(&self) -> usize {
-        self.into_iter().fold(0, |acc, t| acc + t.encoded_length())
-    }
-}
-
-impl Encodable for &[u8] {
-    fn encode<B: BufMut>(&self, out: &mut B) {
-        out.put_u16_be(self.len() as u16);
-        out.put_slice(self);
-    }
-
-    fn encoded_length(&self) -> usize {
-        2 + self.len()
+    #[test]
+    fn qos_result_encode() {
+        let mut buf: Vec<u8> = Vec::new();
+        Some(QualityOfService::QoS0).encode(&mut buf);
+        assert_eq!(buf, vec![0]);
+        buf.clear();
+        Some(QualityOfService::QoS1).encode(&mut buf);
+        assert_eq!(buf, vec![1]);
+        buf.clear();
+        Some(QualityOfService::QoS2).encode(&mut buf);
+        assert_eq!(buf, vec![2]);
+        buf.clear();
+        None.encode(&mut buf);
+        assert_eq!(buf, vec![128])
     }
 }
 
@@ -456,14 +673,44 @@ impl<'a> fmt::Display for MqttString<'a> {
     }
 }
 
+impl<'a> PartialEq<str> for MqttString<'a> {
+    fn eq(&self, other: &str) -> bool {
+        self.0.eq(other)
+    }
+}
+
+impl<'a> TryFrom<&'a str> for MqttString<'a> {
+    type Error = Error<'a>;
+
+    fn try_from(value: &'a str) -> Result<MqttString<'a>, Error<'a>> {
+        MqttString::new(value)
+    }
+}
+
+impl<'a> From<MqttString<'a>> for &'a str {
+    fn from(value: MqttString<'a>) -> &'a str {
+        value.0
+    }
+}
+
 impl<'a> Encodable for MqttString<'a> {
     fn encode<B: BufMut>(&self, out: &mut B) {
-        out.put_u16_be(self.0.len() as u16);
-        out.put_slice(self.0.as_bytes());
+        self.0.as_bytes().encode(out);
     }
 
     fn encoded_length(&self) -> usize {
-        2 + self.as_ref().len()
+        self.0.as_bytes().encoded_length()
+    }
+}
+
+#[cfg(test)]
+mod mqtt_string_tests {
+    use super::{MqttString, Error};
+
+    #[test]
+    fn new() {
+        assert_eq!(MqttString::new("test"), Ok(MqttString("test")));
+        assert_eq!(MqttString::new("has a null\0"), Err(Error::InvalidString{ string: "has a null\0"}));
     }
 }
 

@@ -30,6 +30,13 @@ impl<'a> MqttPacket<'a> {
     ///
     /// It may be easier to use the `MqttPacket` type in a match statement so that the identification and use of the
     /// packet contents is easier. This method is provided for convenience.
+    /// 
+    /// # Examples
+    /// ```
+    /// # use mqtt3_proto::{MqttPacket, PacketType};
+    /// let packet1 = MqttPacket::PubAck{ packet_id: 1 };
+    /// assert_eq!(packet1.packet_type(), PacketType::PubAck);
+    /// ```
     pub fn packet_type(&self) -> PacketType {
         use self::MqttPacket::*;
 
@@ -76,6 +83,13 @@ impl<'a> MqttPacket<'a> {
     /// be returned.
     ///
     /// If an problem occurs while decoding the bytes, an error will be returned.
+    /// 
+    /// # Examples
+    /// ```
+    /// # use mqtt3_proto::{MqttPacket, Error};
+    /// let buffer: Vec<u8> = vec![0b10110000, 2, 0, 1];
+    /// assert_eq!(MqttPacket::from_buf(&buffer), Ok(Some((&[][..], MqttPacket::UnsubAck{ packet_id: 1}))));
+    /// ```
     pub fn from_buf<B: AsRef<[u8]>>(
         buf: &'a B,
     ) -> Result<Option<(&'a [u8], MqttPacket<'a>)>, Error<'a>> {
@@ -98,6 +112,10 @@ impl<'a> MqttPacket<'a> {
     /// # Panics
     /// Panics if `out` does not have enough capacity to contain the packet. Use `len()` to determine the size of the
     /// encoded packet.
+    /// 
+    /// # Examples
+    /// ```
+    /// ```
     pub fn encode<B: BufMut>(&self, out: &mut B) -> Result<(), Error<'a>> {
         use self::MqttPacket::*;
 
@@ -150,17 +168,12 @@ impl<'a> MqttPacket<'a> {
                     out.put_u8(*e as u8);
                 }
             },
-            Publish {
-                topic_name,
-                pub_type,
-                message,
-                ..
-            } => {
+            Publish { topic_name, pub_type, message, ..} => {
                 topic_name.encode(out);
                 if let Some(id) = pub_type.packet_id() {
                     out.put_u16_be(id);
                 }
-                out.put_slice(message);
+                message.encode(out);
             }
             PubAck { packet_id }
             | PubRec { packet_id }

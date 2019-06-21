@@ -178,6 +178,7 @@ fn mqtt_string<'a>(input: &'a [u8]) -> ParserResult<'a, &'a [u8], MqttString<'a>
 #[cfg(test)]
 mod mqtt_string_tests {
     use super::{mqtt_string, Err, Error, MqttString, ParserError};
+    use std::str;
     use nom::Needed;
 
     #[test]
@@ -187,6 +188,31 @@ mod mqtt_string_tests {
             mqtt_string(&one),
             Ok((&[][..], MqttString::new_unchecked("MQTT")))
         );
+    }
+
+    #[test]
+    fn null_terminated_strings() {
+        let null_terminated = [0x0, 0xC, 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x0,];
+        assert_eq!(
+            mqtt_string(&null_terminated),
+            Err(Err::Error(ParserError::some(Error::InvalidString{ string: "hello world\0"})))
+        );
+    }
+
+    #[test]
+    fn not_utf8() {
+        let not_utf8 = [0x0, 0xA, 0x7f, 0xaa, 0x72, 0x23, 0x7f, 0x0d, 0x47, 0xc9, 0x45, 0x49,];
+        let utf8_err = str::from_utf8(&not_utf8[2..]).unwrap_err();
+        assert_eq!(
+            mqtt_string(&not_utf8),
+            Err(Err::Error(ParserError::some(Error::StringNotUtf8{ input: &not_utf8[2..], source: utf8_err })))
+        );
+    }
+
+    #[test]
+    fn missing_input() {
+        let not_enough = [0x0, 0xB, 0x68, 0x65, 0x6C, 0x6C,];
+        assert_eq!(mqtt_string(&not_enough), Err(Err::Incomplete(Needed::Size(0xB))))
     }
 }
 
