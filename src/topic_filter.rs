@@ -1,15 +1,11 @@
 use std::fmt;
 
-use regex::{escape, Regex};
+use regex::{escape, Regex, Captures};
 use snafu::{Snafu, ResultExt};
-use nom::IResult;
-use nom::multi::separated_nonempty_list;
-use nom::combinator::map;
-use nom::character::streaming::{alphanumeric0, char};
-use nom::branch::alt;
 
 lazy_static!{
     static ref VALIDATOR: Regex = Regex::new(r"^(([^/\+#]*|\+)/)*([^/\+#]*|#|\+)?$").unwrap();
+    static ref REPLACER: Regex = Regex::new("([^/]*)").unwrap();
 }
 
 static SINGLE_WILDCARD_RE: &'static str = "([^/]+)";
@@ -32,21 +28,21 @@ pub struct TopicFilter {
 }
 
 impl TopicFilter {
-    pub fn <'a>new(s: &'a str) -> Result<TopicFilter, Error<'a>> {
+    pub fn new<'a>(s: &'a str) -> Result<TopicFilter, Error<'a>> {
         ensure!(!s.is_empty(), EmptyTopicFilter);
         ensure!(VALIDATOR.is_match(s), InvalidTopicFilter{ filter: s });
 
-        let parts = match filter_parser {
-            Ok((rest, out)) if rest.is_empty() => out,
-            _ => return Err(Error::InvalidTopicFilter{})
-        };
+        let match_expr = REPLACER.replace_all(s, |caps: &Captures| {
+            let part = caps.get(0).unwrap().as_str();
+            if part == "+" {
+                SINGLE_WILDCARD_RE.into()
+            } else if part == "#" {
+                MULTI_WILDCARD_RE.into()
+            } else {
+                escape(part)
+            }
+        });
 
-        let mut collect = Vec::with_capacity(parts.len());
-        for part in parts {
-            collect.push(part.as_str());
-        }
-
-        let match_expr = format!("^{}$", collect.join("/"));
         let match_regex = Regex::new(&match_expr).with_context(|| CompilationError { filter: s.clone() })?;
         Ok(TopicFilter {
             filter: s.into(),
@@ -63,30 +59,6 @@ impl fmt::Display for TopicFilter {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.filter)
     }
-}
-
-enum FilterPart {
-    Literal(String),
-    SingleLevelWildcard,
-    MultiLevelWildcard,
-}
-
-impl FilterPart {
-    pub fn as_str(&self) -> &str {
-        match self {
-            FilterPart::Literal(s) => &s,
-            FilterPart::SingleLevelWildcard => SINGLE_WILDCARD_RE,
-            FilterPart::MultiLevelWildcard => MULTI_WILDCARD_RE
-        }
-    }
-}
-
-fn filter_parser<'a>(input: &'a str) -> IResult<&'a str, Vec<FilterPart>> {
-    separated_nonempty_list(char('/'), alt((
-        map(char('+'), |_| FilterPart::SingleLevelWildcard),
-        map(char('#'), |_| FilterPart::MultiLevelWildcard),
-        map(alphanumeric0, |s| FilterPart::Literal(escape(s))),
-    )))(input)
 }
 
 #[cfg(test)]
