@@ -1,14 +1,14 @@
 use std::convert::TryFrom;
 use std::str;
 
-use nom::bits::{bits, streaming::take_bits};
+use nom::bits::{bits, streaming::take as take_bits};
 use nom::bytes::streaming::take;
 use nom::combinator::{complete, cond, flat_map, map, map_parser};
 use nom::error::*;
 use nom::multi::many1;
 use nom::number::streaming::{be_u16, be_u8};
 use nom::sequence::tuple;
-use nom::{Err, IResult};
+use nom::{Err, IResult, ErrorConvert};
 
 use super::errors::Error;
 use super::types::*;
@@ -54,6 +54,12 @@ impl<'a> ParseError<(&'a [u8], usize)> for ParserError<'a> {
 
     fn append(_: (&'a [u8], usize), _: ErrorKind, other: ParserError<'a>) -> ParserError<'a> {
         other
+    }
+}
+
+impl<'a> ErrorConvert<ParserError<'a>> for ParserError<'a> {
+    fn convert(self) -> ParserError<'a> {
+        self
     }
 }
 
