@@ -1,5 +1,4 @@
 use std::error;
-use futures::Future;
 
 mod mem;
 
@@ -14,23 +13,23 @@ pub use self::mem::MemoryPersistence;
 ///  1. It **MUST** provide fast random access to a key-value pair. This can be achieved with an
 ///     in-memory cache of key-value pairs.
 ///  2. It's backing store **SHOULD** be persisted to a non-volatile storage medium.
-///  3. It **MUST** atomically process the `insert` operation. Either the packet is successfully
+///  3. It **MUST** atomically process the `put` operation. Either the packet is successfully
 ///     processed and saved, or it fails.
 ///  4. It **MAY** batch `remove` operations, but it **MUST** appear to have happened instantly
 ///     (the value referred to by the key must not be retrievable after deletion).
 ///  5. It **MAY** delay the processing of the `clear` operation, but **MUST** appeared to have
 ///     happened instantly.
 ///
-pub trait Persistence {
+pub trait Persistence<'a> {
     type Error: error::Error + Send;
     /// Put a packet into the store using the specified key.
-    fn put(&mut self, key: String, packet: &[u8]) -> Box<dyn Future<Item=(), Error=Self::Error>>;
+    fn put(&'a mut self, key: String, packet: &[u8]) -> Result<(), Self::Error>;
     /// Retrieve a packet from the store, if it exists.
-    fn get(&mut self, key: &str) -> Box<dyn Future<Item=Option<&[u8]>, Error=Self::Error>>;
+    fn get(&'a mut self, key: &str) -> Result<Option<&[u8]>, Self::Error>;
     /// Remove a packet from the store, if it exists.
-    fn remove(&mut self, key: &str) -> Box<dyn Future<Item=(), Error=Self::Error>>;
+    fn remove(&'a mut self, key: &str) -> Result<(), Self::Error>;
     /// Return a Vec of keys in the store.
-    fn keys(&mut self) -> Box<dyn Future<Item=Vec<String>, Error=Self::Error>>;
+    fn keys(&'a mut self) -> Result<Vec<String>, Self::Error>;
     /// Clear the store of packets.
-    fn clear(&mut self) -> Box<dyn Future<Item=(), Error=Self::Error>>;
+    fn clear(&'a mut self) -> Result<(), Self::Error>;
 }
