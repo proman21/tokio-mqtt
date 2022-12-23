@@ -1,5 +1,7 @@
 use std::error;
 
+use mqtt3_proto::{MqttPacket, Error};
+
 mod mem;
 
 pub use self::mem::MemoryPersistence;
@@ -21,11 +23,11 @@ pub use self::mem::MemoryPersistence;
 ///     happened instantly.
 ///
 pub trait Persistence<'a> {
-    type Error: error::Error + Send;
+    type Error: error::Error + Send + From<Error<'a>>;
     /// Put a packet into the store using the specified key.
-    fn put(&'a mut self, key: String, packet: &[u8]) -> Result<(), Self::Error>;
+    fn put(&'a mut self, key: &str, packet: &MqttPacket<'a>) -> Result<(), Self::Error>;
     /// Retrieve a packet from the store, if it exists.
-    fn get(&'a mut self, key: &str) -> Result<Option<&[u8]>, Self::Error>;
+    fn get(&'a mut self, key: &str) -> Result<Option<MqttPacket<'a>>, Self::Error>;
     /// Remove a packet from the store, if it exists.
     fn remove(&'a mut self, key: &str) -> Result<(), Self::Error>;
     /// Return a Vec of keys in the store.

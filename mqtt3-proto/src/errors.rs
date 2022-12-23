@@ -32,8 +32,6 @@ pub enum Error<'a> {
     MissingPayload,
     #[snafu(display("Remaining packet length is larger then actual remaining packet."))]
     IncompletePacket,
-    #[snafu(display("'{}' is not a valid return code.", return_code))]
-    InvalidSubAckReturnCode { return_code: u8 },
     #[snafu(display("Session present should not be set if the connect return code is an error."))]
     UnexpectedSessionPresent,
     #[snafu(display("{:b} is not a valid set of Connect flags.", flags))]
@@ -46,6 +44,8 @@ pub enum Error<'a> {
     VleOverflow,
     #[snafu(display("'{}' is not a valid Quality of Service level.", qos))]
     InvalidQos { qos: u8 },
+    #[snafu(display("'{}' is not a valid SubAck Return Code.", code))]
+    InvalidSubAckReturnCode { code: u8 },
     #[snafu(display("Expected {:b} for {} packet flags, got {:b}.", expected, ty, received))]
     UnexpectedPacketFlags {
         expected: u8,

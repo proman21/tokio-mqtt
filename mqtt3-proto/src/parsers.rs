@@ -357,14 +357,8 @@ fn sub_ack_packet<'a>(input: &'a [u8]) -> ParserResult<&'a [u8], MqttPacket<'a>>
 
     // Payload
     let (r2, results) = add_error(
-        many1(map_res_err(be_u8, |code| match code {
-            0 => Ok(Some(QualityOfService::QoS0)),
-            1 => Ok(Some(QualityOfService::QoS1)),
-            2 => Ok(Some(QualityOfService::QoS2)),
-            128 => Ok(None),
-            _ => Err(ParserError::some(Error::InvalidSubAckReturnCode {
-                return_code: code,
-            })),
+        many1(map_res_err(be_u8, |code| {
+            SubAckReturnCode::try_from(code).map_err(|e| ParserError::some(e))
         })),
         || Error::MissingPayload,
     )(r1)?;

@@ -5,14 +5,13 @@ use bincode;
 use bytes::Bytes;
 use futures::Stream;
 use futures::sync::mpsc::unbounded;
+use mqtt3_proto::{MqttPacket, QualityOfService, MqttString, Error as ProtoError};
 
-use proto::{MqttPacket, Payload, PacketId, QualityOfService, TopicName, TopicFilter};
-use persistence::Persistence;
-use errors::{Result, Error, ErrorKind, ResultExt};
-use errors::proto::{ErrorKind as ProtoErrorKind};
-use backend::mqtt_loop::LoopData;
-use backend::{OneTimeKey, ClientReturn, SubItem, PublishState};
-use types::SubscriptionStream;
+use crate::persistence::Persistence;
+use crate::errors::*;
+use crate::backend::mqtt_loop::LoopData;
+use crate::backend::{OneTimeKey, ClientReturn, SubItem, PublishState};
+use crate::types::SubscriptionStream;
 
 pub fn sub_ack_handler<P>(packet: MqttPacket, data: &mut LoopData<P>) ->
     Result<Option<MqttPacket>> where P: Persistence {

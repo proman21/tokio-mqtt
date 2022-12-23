@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use actix::prelude::*;
 use futures::sync::oneshot::{channel, Receiver};
 use tokio_io::{AsyncWrite, AsyncRead};
 

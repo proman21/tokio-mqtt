@@ -43,7 +43,8 @@ impl TopicFilter {
             }
         });
 
-        let match_regex = Regex::new(&match_expr).with_context(|| CompilationError { filter: s.clone() })?;
+        let match_regex = Regex::new(&match_expr)
+            .with_context(|| CompilationError { filter: s.clone() })?;
         Ok(TopicFilter {
             filter: s.into(),
             matcher: match_regex

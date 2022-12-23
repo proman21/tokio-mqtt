@@ -4,8 +4,8 @@ use futures::sync::oneshot::channel;
 
 use super::prelude::*;
 use super::ClientReturn;
-use types::MqttFuture;
-use proto::PacketType;
+use crate::types::MqttFuture;
+use mqtt3_proto::PacketType;
 
 pub struct Connect {
     packet: MqttPacket,

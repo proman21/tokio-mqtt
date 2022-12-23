@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 
+use mqtt3_proto::{MqttPacket, Error};
 use crate::persistence::Persistence;
 
 /// In-memory persistence storage. Does violate the requirement for non-volatile persistence, but can be useful when
@@ -10,15 +11,20 @@ pub struct MemoryPersistence {
 }
 
 impl<'a> Persistence<'a> for MemoryPersistence {
-    type Error = Infallible;
+    type Error = Error<'a>;
 
-    fn put(&'a mut self, key: String, packet: &[u8]) -> Result<(), Self::Error> {
-        self.map.insert(key, Vec::from(packet));
+    fn put(&'a mut self, key: &str, packet: &MqttPacket<'a>) -> Result<(), Self::Error> {
+        let mut buf = Vec::with_capacity(packet.len()?);
+        packet.encode(&mut buf)?;
+        self.map.insert(String::from(key), buf);
         Ok(())
     }
 
-    fn get(&'a mut self, key: &str) -> Result<Option<&[u8]>, Self::Error> {
-        Ok(self.map.get(key).map(|s| s.as_ref()))
+    fn get(&'a mut self, key: &str) -> Result<Option<MqttPacket<'a>>, Self::Error> {
+        self.map.get(key)
+            .map(|s| MqttPacket::from_buf(s)
+                .map(|p| p.expect("Memory persistence curruption").1))
+            .transpose()
     }
 
     fn remove(&'a mut self, key: &str) -> Result<(), Self::Error> {

@@ -58,6 +58,23 @@ impl<'a> MqttPacket<'a> {
         }
     }
 
+    pub fn packet_id(&self) -> Option<u16> {
+        use self::MqttPacket::*;
+
+        match self {
+            Publish{ pub_type, .. } => pub_type.packet_id(),
+            PubAck{ packet_id } => Some(*packet_id),
+            PubRec{ packet_id } => Some(*packet_id),
+            PubRel{ packet_id } => Some(*packet_id),
+            PubComp{ packet_id } => Some(*packet_id),
+            Subscribe{ packet_id, .. } => Some(*packet_id),
+            SubAck{ packet_id, .. } => Some(*packet_id),
+            Unsubscribe{ packet_id, .. } => Some(*packet_id),
+            UnsubAck{ packet_id, .. } => Some(*packet_id),
+            _ => None,
+        }
+    }
+
     fn packet_flags(&self) -> PacketFlags {
         use MqttPacket::*;
 
@@ -242,14 +259,14 @@ impl<'a> MqttPacket<'a> {
 
     /// Determine the length of the encoded packet, if possible. Packets bigger then 256MB cannot be encoded, and
     /// will cause this method to return `None`.
-    pub fn len(&self) -> Option<usize> {
+    pub fn len(&self) -> Result<usize, Error<'a>> {
         let payload_size = self.encoded_length();
         match payload_size {
-            0...127 => Some(1),
-            128...16_383 => Some(2),
-            16_384...2_097_151 => Some(3),
-            2_097_152 => Some(4),
-            _ => None,
+            0..=127 => Ok(1),
+            128..=16_383 => Ok(2),
+            16_384..=2_097_151 => Ok(3),
+            2_097_152 => Ok(4),
+            _ => Err(Error::PacketTooBig{ encoded_size: payload_size }),
         }
         .map(|b| 1 + b + payload_size)
     }

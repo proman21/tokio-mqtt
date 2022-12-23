@@ -58,7 +58,7 @@ pub enum MqttPacket<'a> {
     },
     SubAck {
         packet_id: u16,
-        results: Vec<Option<QualityOfService>>,
+        results: Vec<SubAckReturnCode>,
     },
     Unsubscribe {
         packet_id: u16,

@@ -429,7 +429,7 @@ mod publish_type_tests {
 
 enum_from_primitive! {
     /// Types of packets in the MQTT Protocol.
-    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub enum PacketType {
         Connect     = 1,
         ConnAck     = 2,
@@ -547,9 +547,77 @@ impl TryFrom<u8> for ProtoLvl {
 }
 
 enum_from_primitive! {
+    /// Return code for a SubAck packet, indicating either the maximum quality of service of the subscription,
+    /// or a failure to subscribe.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[repr(u8)]
+    pub enum SubAckReturnCode {
+        /// Subscription was successfully acknowledged with a maximum QoS 0.
+        QoS0 = 0,
+        /// Subscription was successfully created with a maximum QoS 1.
+        QoS1 = 1,
+        /// Subscription was successfully created with a maximum QoS 2.
+        QoS2 = 2,
+        /// Server failed to create subscription.
+        Failure = 0x80,
+    }
+}
+
+impl TryFrom<u8> for SubAckReturnCode {
+    type Error = Error<'static>;
+
+    fn try_from(value: u8) -> Result<SubAckReturnCode, Error<'static>> {
+        SubAckReturnCode::from_u8(value).ok_or(Error::InvalidSubAckReturnCode { code: value })
+    }
+}
+
+impl fmt::Display for SubAckReturnCode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &SubAckReturnCode::QoS0 => write!(f, "Success - Maximum QoS 0"),
+            &SubAckReturnCode::QoS1 => write!(f, "Success - Maximum QoS 1"),
+            &SubAckReturnCode::QoS2 => write!(f, "Success - Maximum QoS 2"),
+            &SubAckReturnCode::Failure => write!(f, "Failure"),
+        }
+    }
+}
+
+impl Encodable for SubAckReturnCode {
+    fn encode<B: BufMut>(&self, out: &mut B) {
+        out.put_u8(*self as u8)
+    }
+
+    fn encoded_length(&self) -> usize {
+        1
+    }
+}
+
+#[cfg(test)]
+mod sub_ack_return_code_tests {
+    use super::{Encodable, SubAckReturnCode};
+
+    #[test]
+    fn sub_ack_return_code_encode() {
+        let mut buf: Vec<u8> = Vec::new();
+        SubAckReturnCode::QoS0.encode(&mut buf);
+        assert_eq!(buf, vec![0]);
+        buf.clear();
+        SubAckReturnCode::QoS1.encode(&mut buf);
+        assert_eq!(buf, vec![1]);
+        buf.clear();
+        SubAckReturnCode::QoS2.encode(&mut buf);
+        assert_eq!(buf, vec![2]);
+        buf.clear();
+        SubAckReturnCode::Failure.encode(&mut buf);
+        assert_eq!(buf, vec![128])
+    }
+}
+
+enum_from_primitive! {
     /// Set of quality of service levels a message can be sent with. These provide certain guarantees about the delivery
     /// of messages.
     #[derive(Clone, Copy, Debug, PartialEq)]
+    #[repr(u8)]
     pub enum QualityOfService {
         /// QoS Level 1: At most once delivery.
         /// The server will not respond to the message and the client will not attempt resending.
@@ -593,19 +661,6 @@ impl Encodable for QualityOfService {
     }
 }
 
-impl Encodable for Option<QualityOfService> {
-    fn encode<B: BufMut>(&self, out: &mut B) {
-        match self {
-            Some(q) => q.encode(out),
-            None => out.put_u8(128),
-        }
-    }
-
-    fn encoded_length(&self) -> usize {
-        1
-    }
-}
-
 #[cfg(test)]
 mod qos_tests {
     use super::{Encodable, QualityOfService};
@@ -621,22 +676,6 @@ mod qos_tests {
         buf.clear();
         QualityOfService::QoS2.encode(&mut buf);
         assert_eq!(buf, vec![2]);
-    }
-
-    #[test]
-    fn qos_result_encode() {
-        let mut buf: Vec<u8> = Vec::new();
-        Some(QualityOfService::QoS0).encode(&mut buf);
-        assert_eq!(buf, vec![0]);
-        buf.clear();
-        Some(QualityOfService::QoS1).encode(&mut buf);
-        assert_eq!(buf, vec![1]);
-        buf.clear();
-        Some(QualityOfService::QoS2).encode(&mut buf);
-        assert_eq!(buf, vec![2]);
-        buf.clear();
-        None.encode(&mut buf);
-        assert_eq!(buf, vec![128])
     }
 }
 

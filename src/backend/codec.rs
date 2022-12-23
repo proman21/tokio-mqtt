@@ -1,37 +1,60 @@
-use ::tokio_io::codec::{Encoder, Decoder, Framed};
-use ::bytes::{BytesMut, BufMut};
-use ::proto::MqttPacket;
-use ::errors::{Error, ErrorKind};
+use std::marker::PhantomData;
+use std::ops::Deref;
 
-pub type MqttFramed<I> = Framed<I, MqttCodec>;
+use tokio::codec::{Encoder, Decoder};
+use bytes::{Bytes, BytesMut, BufMut};
+use mqtt3_proto::MqttPacket;
+use snafu::ResultExt;
 
-pub struct MqttCodec;
+use crate::errors::*;
 
-impl Encoder for MqttCodec {
-    type Item = MqttPacket;
-    type Error = Error;
+pub struct MqttPacketBuf<'a> {
+    buf: Bytes,
+    packet: MqttPacket<'a>,
+}
 
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        if let Some(b) = item.encode() {
-            dst.extend(b);
-            Ok(())
-        } else {
-            bail!(ErrorKind::PacketEncodingError(item))
-        }
+impl<'a> Deref for MqttPacketBuf<'a> {
+    type Target = MqttPacket<'a>;
+
+    fn deref(&self) -> &MqttPacket<'a> {
+        &self.packet
     }
 }
 
-impl Decoder for MqttCodec {
-    type Item = MqttPacket;
-    type Error = Error;
+pub struct MqttCodec<'a>(PhantomData<&'a ()>);
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let by = src.take();
-        if let Some((packet, rest)) = MqttPacket::from_slice(&by)? {
-            src.put(rest);
-            Ok(Some(packet))
+impl<'a> MqttCodec<'a> {
+    pub fn new() -> MqttCodec<'a> {
+        MqttCodec(PhantomData)
+    }
+}
+
+impl<'a> Encoder for MqttCodec<'a> {
+    type Item = MqttPacket<'a>;
+    type Error = Error<'a>;
+
+    fn encode(&mut self, item: MqttPacket<'a>, dst: &mut BytesMut) -> Result<(), Error<'a>> {
+        let len = item.len().context(ProtocolError)?;
+        dst.reserve(len);
+        item.encode(dst).context(ProtocolError)
+    }
+}
+
+impl<'a> Decoder for MqttCodec<'a> {
+    type Item = MqttPacketBuf<'a>;
+    type Error = Error<'a>;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<MqttPacketBuf<'a>>, Error<'a>> {
+        let buf = src.take().freeze();
+        if let Some((rest, packet)) = MqttPacket::from_buf(&buf).context(ProtocolError)? {
+            let remain = buf.slice_ref(rest);
+            src.put(remain);
+            Ok(Some(MqttPacketBuf {
+                buf,
+                packet
+            }))
         } else {
-            src.put(by);
+            src.put(buf);
             Ok(None)
         }
 
